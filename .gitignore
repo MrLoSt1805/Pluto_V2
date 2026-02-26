@@ -1,0 +1,6 @@
+.env 
+combined_db.db 
+venv/ 
+__pycache__/ 
+uploads/ 
+error_logs/ 

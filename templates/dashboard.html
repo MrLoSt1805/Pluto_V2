@@ -269,14 +269,16 @@
                     </div>
                 </div>
             </div>
-
             <div class="col-md-3">
                 <div class="card shadow-sm hover-lift">
                     <div class="card-body text-center">
-                        <h6 class="card-title text-muted mb-1">Avg Handbook Time</h6>
-                        <h3 class="mb-0"><span id="metric-avg-handbook-time">0</span>s</h3>
-                        <small class="text-muted" id="metric-avg-handbook-time-trend">
-                            <i class="bi bi-dash"></i> <span>No change</span>
+                        <h6 class="card-title text-muted mb-1">Token Usage</h6>
+                        <h5 class="mb-1">
+                            <span id="metric-total-tokens">0</span>
+                            <small class="text-muted">tokens</small>
+                        </h5>
+                        <small class="text-muted d-block">
+                            ≈ <span id="metric-tokens-per-eval">0</span> tokens / evaluation
                         </small>
                     </div>
                 </div>
@@ -467,6 +469,43 @@
                                     </tr>
                                 </tbody>
                             </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Token Usage Summary (bottom window) -->
+        <div class="row mt-4">
+            <div class="col-12">
+                <div class="card shadow-sm">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="bi bi-cpu"></i> Token Usage per Resume Evaluation</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row text-center">
+                            <div class="col-md-3 col-sm-6 mb-3 mb-md-0">
+                                <h6 class="text-muted mb-1">Total Resumes Evaluated</h6>
+                                <h4 class="mb-0" id="token-metric-total-evals">0</h4>
+                            </div>
+                            <div class="col-md-3 col-sm-6 mb-3 mb-md-0">
+                                <h6 class="text-muted mb-1">Total Tokens Used</h6>
+                                <h4 class="mb-0">
+                                    <span id="token-metric-total-tokens">0</span>
+                                </h4>
+                            </div>
+                            <div class="col-md-3 col-sm-6 mb-3 mb-md-0">
+                                <h6 class="text-muted mb-1">Avg Tokens per Evaluation</h6>
+                                <h4 class="mb-0">
+                                    <span id="token-metric-avg-per-eval">0</span>
+                                </h4>
+                            </div>
+                            <div class="col-md-3 col-sm-6">
+                                <h6 class="text-muted mb-1">Latest Resume Token Usage</h6>
+                                <h4 class="mb-0">
+                                    <span id="token-metric-latest-eval">-</span>
+                                </h4>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -934,7 +973,20 @@ async function loadDashboard(showLoading = true) {
             setTextContent('metric-conversion-rate', metrics.conversion_rate);
             setTextContent('metric-avg-evals-job', metrics.avg_evals_per_job);
             setTextContent('metric-avg-time', metrics.avg_eval_time);
-            setTextContent('metric-avg-handbook-time', metrics.avg_handbook_time || 0);
+            // Token usage metrics (always show actual values from database)
+            const totalTokens = metrics.total_tokens_used ?? 0;
+            const tokensPerEval = metrics.tokens_per_eval ?? 0;
+            setTextContent('metric-total-tokens', totalTokens.toLocaleString());
+            setTextContent('metric-tokens-per-eval', tokensPerEval.toLocaleString());
+
+            // Bottom token usage summary window (always visible, always updated)
+            setTextContent('token-metric-total-evals', metrics.total_evaluations);
+            setTextContent('token-metric-total-tokens', totalTokens.toLocaleString());
+            setTextContent('token-metric-avg-per-eval', tokensPerEval.toLocaleString());
+            // Latest evaluation token usage (show "-" if not available)
+            const latestEvalTokens = metrics.latest_eval_tokens ?? null;
+            const latestEvalDisplay = latestEvalTokens !== null ? latestEvalTokens.toLocaleString() : '-';
+            setTextContent('token-metric-latest-eval', latestEvalDisplay);
             
             // Update trend indicators
             updateTrendIndicator('metric-total-evals-trend', metrics.trends?.evaluations);

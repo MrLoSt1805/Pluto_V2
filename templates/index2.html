@@ -1,104 +1,9 @@
 ﻿{% extends 'base.html' %}
 
-{% block title %}HR Tools - Recruiter Copilot & Recruiter Handbook{% endblock %}
+{% block title %}HR Tools - Pluto & Recruiter Handbook{% endblock %}
 
 {% block content %}
 <style>
-    .sidebar {
-        min-height: calc(100vh - 200px);
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        box-shadow: 2px 0 10px rgba(0,0,0,0.1);
-        transition: margin-left 0.3s ease;
-        position: relative;
-    }
-    .sidebar.collapsed {
-        margin-left: -250px;
-    }
-    .sidebar-item {
-        padding: 15px 20px;
-        cursor: pointer;
-        color: rgba(255,255,255,0.7);
-        transition: all 0.3s ease;
-        border-left: 4px solid transparent;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-    .sidebar-item:hover {
-        background: rgba(255,255,255,0.1);
-        color: white;
-    }
-    .sidebar-item.active {
-        background: rgba(255,255,255,0.2);
-        color: white;
-        border-left-color: white;
-        font-weight: 600;
-    }
-    .sidebar-item i {
-        font-size: 1.2rem;
-    }
-    .collapse-toggle {
-        position: absolute;
-        bottom: 20px;
-        left: 50%;
-        transform: translateX(-50%);
-        background: rgba(255,255,255,0.2);
-        border: none;
-        color: white;
-        padding: 8px 16px;
-        border-radius: 20px;
-        cursor: pointer;
-        transition: all 0.3s ease;
-    }
-    .collapse-toggle:hover {
-        background: rgba(255,255,255,0.3);
-    }
-    .main-content-area {
-        transition: margin-left 0.3s ease;
-        flex: 1;
-        min-width: 0;
-    }
-    .content-section {
-        width: 100%;
-        max-width: 100%;
-    }
-    .sidebar {
-        flex-shrink: 0;
-    }
-    .row.g-0 {
-        margin: 0;
-        width: 100%;
-        display: flex;
-        flex-direction: row;
-        flex-wrap: nowrap;
-    }
-    .row.g-0 > div {
-        flex-shrink: 0;
-    }
-    @media (max-width: 768px) {
-        .sidebar {
-            position: absolute;
-            z-index: 1000;
-        }
-    }
-    .expand-btn {
-        position: fixed;
-        left: 10px;
-        top: 50%;
-        transform: translateY(-50%);
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        border: none;
-        padding: 10px 15px;
-        border-radius: 0 20px 20px 0;
-        cursor: pointer;
-        z-index: 1000;
-        box-shadow: 2px 2px 10px rgba(0,0,0,0.2);
-        display: none;
-    }
-    .expand-btn.show {
-        display: block;
-    }
     /* Handbook Star Rating Styles */
     .handbook-star-rating {
         display: flex;
@@ -117,41 +22,13 @@
     }
 </style>
 
-<button class="expand-btn" id="expandSidebarBtn">
-    <i class="bi bi-chevron-right"></i>
-</button>
-
 <div class="container-fluid">
     <div class="row g-0">
-        <!-- Left Sidebar -->
-        <div class="col-3 col-lg-2 sidebar" id="mainSidebar">
-        <div class="p-3">
-            <h5 class="text-white mb-4">
-                <i class="bi bi-grid-3x3-gap-fill"></i> Modules
-            </h5>
-        </div>
-        <div class="sidebar-item active" data-section="handbook">
-            <i class="bi bi-book-fill"></i>
-            <span>Recruiter Handbook</span>
-        </div>
-        <div class="sidebar-item" data-section="matchmaker">
-            <i class="bi bi-clipboard-check-fill"></i>
-            <span>MatchMaker</span>
-        </div>
-        <a class="sidebar-item" href="/history">
-            <i class="bi bi-clock-history"></i>
-            <span>History</span>
-        </a>
-        <button class="collapse-toggle" id="collapseSidebarBtn">
-            <i class="bi bi-chevron-left"></i> Collapse
-        </button>
-    </div>
-    
-    <!-- Main Content Area -->
-    <div class="col-9 col-lg-10 main-content-area" id="mainContentArea">
-        <div class="p-4">
+        <!-- Main Content Area (sidebar is now global in base.html) -->
+        <div class="main-content-area w-100" id="mainContentArea">
+            <div class="p-4">
             <!-- Recruiter Handbook Section -->
-            <div id="handbook-section" class="content-section">
+            <div id="handbook-section" class="content-section" style="display: none;">
                 <!-- No tabs needed - just the content -->
                 <div id="handbookContent">
                         <div class="row justify-content-center">
@@ -304,8 +181,8 @@
             </div>
             <!-- End Recruiter Handbook Section -->
             
-            <!-- Recruiter Copilot Section -->
-            <div id="matchmaker-section" class="content-section" style="display: none;">
+            <!-- Pluto Section -->
+            <div id="matchmaker-section" class="content-section">
                 <!-- No tabs needed - just the content -->
                 <div id="matchmakerContent">
                         <div class="row mb-4 justify-content-center">
@@ -327,7 +204,7 @@
                                     </div>
                     <div class="mb-3">
                         <label for="resume" class="form-label">Upload Resume (PDF, DOCX)</label>
-                        <input type="file" class="form-control" id="resume" name="resume" accept=".pdf,.docx" multiple required>
+                        <input type="file" class="form-control" id="resume" name="resume" accept=".pdf,.docx,.doc" multiple required>
                     </div>
                     <div class="mb-3">
                         <label for="job_title" class="form-label">Job Title</label>
@@ -352,18 +229,28 @@
                     </div>
                 </form>
             </div>
+            </div>
         </div>
-    </div>
 </div>
 
 <div id="evaluation-result" style="display: none;" class="mb-4">
     <div class="card evaluation-card">
         <div class="card-header d-flex justify-content-between align-items-center">
             <h4 class="mb-0"><i class="bi bi-clipboard-data"></i> Evaluation Results</h4>
-            <div>
-                <button class="btn btn-success btn-sm" id="downloadEvaluationPDF">
+            <div class="text-end">
+                <button class="btn btn-success btn-sm me-2" id="downloadEvaluationPDF">
                     <i class="bi bi-download"></i> Download PDF
                 </button>
+                <button class="btn btn-primary btn-sm" id="downloadEvaluationWithResume">
+                    <i class="bi bi-file-earmark-pdf"></i> Download with Resume
+                </button>
+                <!-- Inline warning area shown when resume is DOCX -->
+                <div id="downloadWithResumeWarning"
+                     class="alert alert-warning mt-2 py-1 px-2 small d-none"
+                     role="alert"
+                     style="font-size: 0.8rem;">
+                    <!-- Populated via JavaScript when DOCX resumes are uploaded -->
+                </div>
             </div>
         </div>
         <div class="card-body">
@@ -631,7 +518,7 @@
                     </div>
                 </div>
                         </div>
-            <!-- End Recruiter Copilot Section -->
+            <!-- End Pluto Section -->
                     </div>
                     </div>
                     </div>
@@ -858,70 +745,131 @@
 </style>
 
 <script>
-// Sidebar functionality
+// Sidebar functionality (only for Pluto page)
 document.addEventListener('DOMContentLoaded', function() {
-    const sidebarItems = document.querySelectorAll('.sidebar-item');
+    const sidebarItems = document.querySelectorAll('.hr-sidebar-item');
     const handbookSection = document.getElementById('handbook-section');
     const matchmakerSection = document.getElementById('matchmaker-section');
-    const sidebar = document.getElementById('mainSidebar');
-    const collapseBtn = document.getElementById('collapseSidebarBtn');
-    const expandBtn = document.getElementById('expandSidebarBtn');
     
     // Sidebar item click handler
     sidebarItems.forEach(item => {
-        item.addEventListener('click', function() {
-            // Remove active class from all items
-            sidebarItems.forEach(i => i.classList.remove('active'));
-            // Add active class to clicked item
-            this.classList.add('active');
-            
+        item.addEventListener('click', function(e) {
             // Get section to show
             const section = this.getAttribute('data-section');
             
-            // Hide all sections
-            handbookSection.style.display = 'none';
-            matchmakerSection.style.display = 'none';
-            
-            // Show selected section
-            if (section === 'handbook') {
-                handbookSection.style.display = 'block';
-            } else if (section === 'matchmaker') {
-                matchmakerSection.style.display = 'block';
+            // If it's a section switcher (handbook or matchmaker), prevent default and switch sections
+            if (section === 'handbook' || section === 'matchmaker') {
+                e.preventDefault();
+                
+                // Remove active class from all items
+                sidebarItems.forEach(i => i.classList.remove('active'));
+                // Add active class to clicked item
+                this.classList.add('active');
+                
+                // Hide all sections
+                if (handbookSection) handbookSection.style.display = 'none';
+                if (matchmakerSection) matchmakerSection.style.display = 'none';
+                
+                // Show selected section
+                if (section === 'handbook' && handbookSection) {
+                    handbookSection.style.display = 'block';
+                } else if (section === 'matchmaker' && matchmakerSection) {
+                    matchmakerSection.style.display = 'block';
+
+                    // When user clicks the Matchmaker button from the sidebar,
+                    // reset the Matchmaker view so they can upload a new resume.
+                    try {
+                        const evaluationForm = document.getElementById('evaluationForm');
+                        const evaluationFormCard = evaluationForm ? evaluationForm.closest('.card') : null;
+                        const evaluationResult = document.getElementById('evaluation-result');
+                        const batchResults = document.getElementById('batch-results');
+
+                        // Show the form again
+                        if (evaluationFormCard) {
+                            evaluationFormCard.style.display = 'block';
+                        }
+
+                        // Hide previous results
+                        if (evaluationResult) {
+                            evaluationResult.style.display = 'none';
+                        }
+                        if (batchResults) {
+                            batchResults.style.display = 'none';
+                        }
+
+                        // Clear any merge warning message
+                        const mergeWarning = document.getElementById('downloadWithResumeWarning');
+                        if (mergeWarning) {
+                            mergeWarning.classList.add('d-none');
+                            mergeWarning.textContent = '';
+                        }
+
+                        // Reset global state used by JS
+                        window.currentEvaluationData = null;
+                        window.currentEvaluationId = null;
+                        window.currentResumePath = null;
+                        window.canMergeResume = undefined;
+                        window.resumeOriginalExt = null;
+                    } catch (err) {
+                        console.error('Error resetting Matchmaker view:', err);
+                    }
+                }
             }
+            // For History and Analytics, let the link navigate normally (no preventDefault)
         });
     });
     
-    // Collapse sidebar
-    collapseBtn.addEventListener('click', function() {
-        sidebar.classList.add('collapsed');
-        expandBtn.classList.add('show');
-    });
+    // Set default active section (Matchmaker) on page load
+    setTimeout(() => {
+        if (matchmakerSection) {
+            // Ensure matchmaker section is visible by default
+            matchmakerSection.style.display = 'block';
+            if (handbookSection) {
+                handbookSection.style.display = 'none';
+            }
+            
+            // Set Matchmaker as active in sidebar
+            const matchmakerItem = document.querySelector('.hr-sidebar-item[data-section="matchmaker"]');
+            const handbookItem = document.querySelector('.hr-sidebar-item[data-section="handbook"]');
+            if (matchmakerItem) {
+                matchmakerItem.classList.add('active');
+            }
+            if (handbookItem) {
+                handbookItem.classList.remove('active');
+            }
+        }
+    }, 100);
     
-    // Expand sidebar
-    expandBtn.addEventListener('click', function() {
-        sidebar.classList.remove('collapsed');
-        expandBtn.classList.remove('show');
-    });
-    
-    // Handle URL parameter for auto-switching to Recruiter Copilot
+    // Handle URL parameter for auto-switching sections
     const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get('job_id')) {
-        // Switch to Recruiter Copilot section
+    const sectionParam = urlParams.get('section');
+    
+    if (sectionParam === 'handbook') {
+        // Switch to Handbook section
+        sidebarItems.forEach(item => {
+            if (item.getAttribute('data-section') === 'handbook') {
+                item.click();
+            }
+        });
+    } else if (sectionParam === 'matchmaker' || urlParams.get('job_id')) {
+        // Switch to Matchmaker section (default or if job_id provided)
         sidebarItems.forEach(item => {
             if (item.getAttribute('data-section') === 'matchmaker') {
                 item.click();
             }
         });
         
-        // Trigger auto-fill after a delay to ensure the form is fully visible and interactive
-        setTimeout(() => {
-            console.log('Triggering auto-fill from sidebar...');
-            if (window.checkUrlParameterAndAutoFill) {
-                window.checkUrlParameterAndAutoFill();
-            } else {
-                console.error('checkUrlParameterAndAutoFill function not found!');
-            }
-        }, 500); // Increased delay to 500ms
+        // Trigger auto-fill if job_id is provided
+        if (urlParams.get('job_id')) {
+            setTimeout(() => {
+                console.log('Triggering auto-fill from sidebar...');
+                if (window.checkUrlParameterAndAutoFill) {
+                    window.checkUrlParameterAndAutoFill();
+                } else {
+                    console.error('checkUrlParameterAndAutoFill function not found!');
+                }
+            }, 500);
+        }
     }
 });
 </script>

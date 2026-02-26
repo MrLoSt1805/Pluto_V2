@@ -6,7 +6,7 @@ import json
 import nltk
 import sqlite3
 from nltk.tokenize import sent_tokenize
-from flask import Flask, request, jsonify, render_template, Response, stream_with_context, make_response, session, redirect, url_for
+from flask import Flask, request, jsonify, render_template, Response, stream_with_context, make_response, session, redirect, url_for, send_file
 from dotenv import load_dotenv
 from authlib.integrations.flask_client import OAuth
 from functools import wraps
@@ -58,11 +58,17 @@ from io import BytesIO
 from reportlab.lib.pagesizes import letter, A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Table, TableStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Table, TableStyle, KeepTogether
 from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_JUSTIFY
 from reportlab.lib import colors
 import markdown
 from html import unescape
+try:
+    from PyPDF2 import PdfMerger, PdfReader
+    PDF_MERGE_AVAILABLE = True
+except ImportError:
+    PDF_MERGE_AVAILABLE = False
+    logging.warning("PyPDF2 not available. PDF merging will not work.")
 
 
 # Suppress specific warnings
@@ -71,10 +77,14 @@ warnings.filterwarnings("ignore", category=UserWarning, message="WARNING! presen
 warnings.filterwarnings("ignore", category=UserWarning, message="WARNING! frequency_penalty is not default parameter.")
 
 # Load environment variables
-load_dotenv()
+# Get the directory where this script is located
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ENV_PATH = os.path.join(BASE_DIR, '.env')
+# Load .env file, override existing env vars
+load_dotenv(ENV_PATH, override=True)
 
 # Configuration
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX_NAME = "hr-knowledge-base"
 POLICIES_FOLDER = "HR_docs/"
@@ -135,7 +145,156 @@ QUICK_CHECKS = [
 ############################################################################################
 
 
-# Prompt templates
+# Unified prompt template - Single API call for all analyses
+unified_evaluation_prompt = """
+Act as a senior recruiter with 30+ years of experience.
+
+You MUST evaluate the resume strictly against the job description (JD).
+Your reasoning MUST be based ONLY on explicit evidence written in the resume.
+
+IMPORTANT: This is a recruiter-grade evaluation, NOT an ATS keyword scan.
+
+GENERAL PRINCIPLES (APPLY ALWAYS):
+- Do NOT infer, assume, or guess skills.
+- Do NOT reward buzzwords without demonstrated usage, responsibility, or outcomes.
+- Do NOT hallucinate missing skills or capabilities.
+- Use recruiter judgment to distinguish between:
+  (a) truly missing skills
+  (b) explicitly stated equivalent or functionally identical experience.
+
+CRITICAL DISTINCTION (VERY IMPORTANT):
+- Explicitly equivalent enterprise evidence COUNTS as MATCHED.
+- Adjacent, implied, or loosely related experience does NOT count.
+
+Examples:
+- Kafka usage = VALID for MSK (Kafka) unless JD explicitly requires MSK administration.
+- MySQL / Oracle / PostgreSQL on AWS = VALID for RDS unless JD explicitly requires RDS operations.
+- CI/CD ownership, Docker, cloud deployments = VALID evidence of DevOps collaboration.
+- Architecture design, solution reviews, platform ownership = VALID evidence of technical specifications.
+- Leadership roles = VALID evidence of mentoring and code review when explicitly stated.
+
+This evaluation MUST work for ANY role (technical or non-technical) and ANY model size (large or small).
+Therefore, follow these STRICT rules:
+
+STRICT EVALUATION RULES (APPLY ALL):
+1. If the JD lists a MUST-HAVE skill AND there is NO direct or equivalent evidence → treat it as NOT MATCHED.
+2. Equivalent enterprise-grade evidence COUNTS if it serves the same functional purpose.
+3. Related, adjacent, or implied experience does NOT count.
+   (Example: "MQ development" ≠ "MQ administration". "Linux exposure" ≠ "Linux admin".)
+4. No assumptions. No optimism. No guessing.
+5. If more than 40% of MUST-HAVE skills are NOT MATCHED → final verdict CANNOT be shortlist.
+6. For non-technical roles, evaluate ONLY achievements, outcomes, metrics, stakeholder scope, and behavioral competencies.
+7. For senior roles, require evidence of leadership, ownership, decision-making, mentoring, and strategic or architectural impact.
+8. If the JD is specialized, the resume MUST show direct evidence of that specialization.
+9. Apply overqualification analysis ONLY when experience, title, or scope significantly exceeds the JD.
+10. Penalize weak resumes aggressively. Do NOT inflate scores for verbosity, repetition, or buzzwords.
+11. If evidence is ambiguous → treat as NOT MATCHED.
+
+CERTIFICATIONS:
+- If certifications are NOT mentioned in the JD → set "Certification Match" = null AND exclude it from scoring.
+- If JD requires certifications:
+   • 100 if candidate has ALL required certifications
+   • 0 if ANY required certification is missing
+- Extra certifications DO NOT increase score beyond 100.
+
+EDUCATION RULE:
+- If JD says "Any Postgraduate" → postgraduate is OPTIONAL.
+- Penalize education ONLY if the mandatory minimum qualification is missing.
+
+JD MATCH CALCULATION:
+- INCLUDE only applicable match factors.
+- Weight all applicable factors equally.
+- EXCLUDE Certification Match when set to null.
+- Overall JD Match must reflect recruiter realism, not keyword completeness.
+
+OUTPUT CONSTRAINTS:
+- Your output MUST be strictly valid JSON.
+- The structure, keys, and format MUST match exactly.
+- Do NOT add, remove, rename, or reorder fields.
+- Do NOT include explanations, markdown, or text outside the JSON.
+
+### Output:
+Return a valid JSON object ONLY. The JSON object MUST have the following structure:
+
+{{
+  "JD Match": "85%",
+  "MissingKeywords": [...],
+  "Profile Summary": "...",
+  "Over/UnderQualification Analysis": "...",
+  "Match Factors": {{
+    "Skills Match": 0-100,
+    "Experience Match": 0-100,
+    "Education Match": 0-100,
+    "Industry Knowledge": 0-100,
+    "Certification Match": number or null
+  }},
+  "Reasoning": "...",
+  "Candidate Fit Analysis": {{
+    "Dimension Evaluation": [
+      {{
+        "Dimension": "...",
+        "Evaluation": "✅ Strong / ⚠️ Moderate / ❌ Weak",
+        "Recruiter Comments": "..."
+      }}
+    ],
+    "Risk and Gaps": [
+      {{
+        "Area": "...",
+        "Risk": "...",
+        "Recruiter Strategy": "..."
+      }}
+    ] or null,
+    "Recommendation": {{
+      "Verdict": "❌ Not Recommended / ⚠️ Conditional Shortlist / ✅ Strong Shortlist",
+      "Fit Level": "High / Medium / Low",
+      "Rationale": "..."
+    }},
+    "Recruiter Narrative": "..."
+  }},
+  "Job Stability": {{
+    "IsStable": true/false,
+    "AverageJobTenure": "...",
+    "JobCount": number,
+    "StabilityScore": 0-100,
+    "ReasoningExplanation": "...",
+    "RiskLevel": "Low / Medium / High"
+  }},
+  "Career Progression": {{
+    "progression_score": 0-100,
+    "key_observations": [...],
+    "career_path": [
+      {{
+        "title": "...",
+        "company": "...",
+        "duration": "...",
+        "level": "Entry/Mid/Senior/Lead/Manager",
+        "progression": "Promotion/Lateral/Step Back"
+      }}
+    ],
+    "red_flags": [...],
+    "reasoning": "..."
+  }},
+  "Interview Questions": {{
+    "TechnicalQuestions": [...10 questions...],
+    "NonTechnicalQuestions": [...10 questions...]
+  }}
+}}
+
+Do NOT include any additional text outside the JSON object.
+
+---
+Resume:
+{resume_text}
+
+JOB DESCRIPTION:
+{job_description}
+
+ADDITIONAL CONTEXT (if any):
+{additional_context_block}
+
+"""
+
+# Legacy prompt template (kept for backward compatibility if needed)
 input_prompt_template = """
 
 Act as a senior recruiter with 30+ years of experience.
@@ -452,23 +611,25 @@ if MODEL_PROVIDER == "openai" and OPENAI_API_KEY:
     try:
         openai_client = OpenAI(api_key=OPENAI_API_KEY)
     except Exception as e:
-        print(f"⚠️  WARNING: Failed to initialize OpenAI client: {e}")
-        print("⚠️  Falling back to Gemini")
+        print(f"WARNING: Failed to initialize OpenAI client: {e}")
+        print("Falling back to Gemini")
 elif MODEL_PROVIDER == "openai" and not OPENAI_API_KEY:
-    print("⚠️  WARNING: MODEL_PROVIDER is set to 'openai' but OPENAI_API_KEY is missing!")
-    print("⚠️  Using Gemini instead. Add OPENAI_API_KEY to your .env file to use OpenAI.")
+    print("WARNING: MODEL_PROVIDER is set to 'openai' but OPENAI_API_KEY is missing!")
+    print("Using Gemini instead. Add OPENAI_API_KEY to your .env file to use OpenAI.")
 
 # Initialize Groq client
 groq_client = None
-if MODEL_PROVIDER == "groq" and GROQ_API_KEY:
-    try:
-        groq_client = Groq(api_key=GROQ_API_KEY)
-    except Exception as e:
-        print(f"⚠️  WARNING: Failed to initialize Groq client: {e}")
-        print("⚠️  Falling back to Gemini")
-elif MODEL_PROVIDER == "groq" and not GROQ_API_KEY:
-    print("⚠️  WARNING: MODEL_PROVIDER is set to 'groq' but GROQ_API_KEY is missing!")
-    print("⚠️  Using Gemini instead. Add GROQ_API_KEY to your .env file to use Groq.")
+if MODEL_PROVIDER == "groq":
+    if GROQ_API_KEY:
+        try:
+            groq_client = Groq(api_key=GROQ_API_KEY)
+            print(f"[INIT] Groq client initialized successfully with model: {GROQ_MODEL}")
+        except Exception as e:
+            print(f"[ERROR] Failed to initialize Groq client: {e}")
+            print("[WARNING] Groq initialization failed. Resume evaluation will fail.")
+    else:
+        print("[ERROR] MODEL_PROVIDER is set to 'groq' but GROQ_API_KEY is missing!")
+        print("[ERROR] Please set GROQ_API_KEY in your .env file.")
 
 # Legacy variable for backward compatibility
 model = gemini_model
@@ -484,7 +645,7 @@ class UnifiedModelResponse:
         self.text = text
         self.output_text = text  # For compatibility with your sample code
 
-def generate_content_unified(prompt, stream=False):
+def generate_content_unified(prompt, stream=False, max_tokens=None):
     """
     Unified function to generate content from either Gemini or OpenAI
     
@@ -496,6 +657,10 @@ def generate_content_unified(prompt, stream=False):
         UnifiedModelResponse or generator: Response object with .text attribute
     """
     try:
+        # Default to a high limit if not specified; individual callers (like Info Buddy)
+        # can pass smaller values for short answers.
+        token_limit = max_tokens or 16384
+
         if MODEL_PROVIDER == "openai" and openai_client:
             # OpenAI API call
             # Use max_completion_tokens for newer models (gpt-4o, gpt-4o-mini, gpt-5, o1, o3, etc.)
@@ -517,7 +682,7 @@ def generate_content_unified(prompt, stream=False):
                         {"role": "user", "content": prompt}
                     ],
                     "stream": True,
-                    token_param: 16384  # Increased from 4096 to handle large outputs
+                    token_param: token_limit  # Adjustable token limit
                 }
                 if supports_temperature:
                     params["temperature"] = 0.7
@@ -539,7 +704,7 @@ def generate_content_unified(prompt, stream=False):
                         {"role": "system", "content": "You are an expert HR analyst and technical recruiter."},
                         {"role": "user", "content": prompt}
                     ],
-                    token_param: 16384  # Increased from 4096 to handle large outputs
+                    token_param: token_limit  # Adjustable token limit
                 }
                 if supports_temperature:
                     params["temperature"] = 0.7
@@ -589,7 +754,7 @@ def generate_content_unified(prompt, stream=False):
                         {"role": "user", "content": prompt}
                     ],
                     "stream": True,
-                    token_param: 16384  # Large output support
+                    token_param: token_limit  # Adjustable token limit
                 }
                 
                 # Add temperature only for non-reasoning models
@@ -616,7 +781,7 @@ def generate_content_unified(prompt, stream=False):
                         {"role": "system", "content": "You are an expert HR analyst and technical recruiter."},
                         {"role": "user", "content": prompt}
                     ],
-                    token_param: 16384
+                    token_param: token_limit
                 }
                 
                 # Add temperature only for non-reasoning models
@@ -675,28 +840,28 @@ def generate_content_unified(prompt, stream=False):
 
 # Log which model is being used
 print("=" * 60)
-print(f"🤖 Model Provider Configuration: {MODEL_PROVIDER.upper()}")
+print(f"Model Provider Configuration: {MODEL_PROVIDER.upper()}")
 if MODEL_PROVIDER == "openai" and openai_client:
-    print(f"✅ ACTUALLY USING: OpenAI Model: {OPENAI_MODEL}")
+    print(f"ACTUALLY USING: OpenAI Model: {OPENAI_MODEL}")
 elif MODEL_PROVIDER == "openai" and not openai_client:
-    print(f"⚠️  ACTUALLY USING: Gemini Model: {GEMINI_MODEL} (OpenAI not available)")
+    print(f"ACTUALLY USING: Gemini Model: {GEMINI_MODEL} (OpenAI not available)")
 elif MODEL_PROVIDER == "groq" and groq_client:
-    print(f"✅ ACTUALLY USING: Groq Model: {GROQ_MODEL}")
+    print(f"ACTUALLY USING: Groq Model: {GROQ_MODEL}")
     if "gpt-oss" in GROQ_MODEL.lower() or "o1-" in GROQ_MODEL.lower() or "o3-" in GROQ_MODEL.lower():
         print(f"   Reasoning Effort: {GROQ_REASONING_EFFORT}")
 elif MODEL_PROVIDER == "groq" and not groq_client:
-    print(f"⚠️  ACTUALLY USING: Gemini Model: {GEMINI_MODEL} (Groq not available)")
+    print(f"ACTUALLY USING: Gemini Model: {GEMINI_MODEL} (Groq not available)")
 else:
-    print(f"✅ ACTUALLY USING: Gemini Model: {GEMINI_MODEL}")
+    print(f"ACTUALLY USING: Gemini Model: {GEMINI_MODEL}")
 print("=" * 60)
 
-logging.info(f"🤖 Model Provider: {MODEL_PROVIDER.upper()}")
+logging.info(f"Model Provider: {MODEL_PROVIDER.upper()}")
 if MODEL_PROVIDER == "openai":
-    logging.info(f"📦 Using OpenAI Model: {OPENAI_MODEL}")
+    logging.info(f"Using OpenAI Model: {OPENAI_MODEL}")
 elif MODEL_PROVIDER == "groq":
-    logging.info(f"📦 Using Groq Model: {GROQ_MODEL}")
+    logging.info(f"Using Groq Model: {GROQ_MODEL}")
 else:
-    logging.info(f"📦 Using Gemini Model: {GEMINI_MODEL}")
+    logging.info(f"Using Gemini Model: {GEMINI_MODEL}")
 
 # ========================================
 
@@ -783,8 +948,23 @@ except Exception as e:
     logging.error(f"❌ Error initializing new vectorstore: {e}")
     vectorstore = None
 
-# Initialize database
+# Uploads & database configuration
 DATABASE_NAME = 'combined_db.db'
+# Ensure uploads folder is always rooted at the app directory so moves/WD changes don't break paths
+app.config['UPLOAD_FOLDER'] = os.path.join(app.root_path, "uploads")
+
+# Dedicated error log file for backend debugging (not exposed to frontend)
+ERROR_LOG_DIR = os.path.join(app.root_path, "error_logs")
+os.makedirs(ERROR_LOG_DIR, exist_ok=True)
+error_log_path = os.path.join(ERROR_LOG_DIR, "resume_download_errors.txt")
+
+error_file_handler = logging.FileHandler(error_log_path, encoding="utf-8")
+error_file_handler.setLevel(logging.ERROR)
+error_formatter = logging.Formatter(
+    "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+)
+error_file_handler.setFormatter(error_formatter)
+logging.getLogger().addHandler(error_file_handler)
 
 def init_db():
     """Initialize database with all required tables"""
@@ -812,6 +992,7 @@ def init_db():
             candidate_fit_analysis TEXT,
             over_under_qualification TEXT,
             time_taken REAL,
+            token_usage INTEGER,
             user_email TEXT,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
@@ -948,8 +1129,23 @@ def init_db():
         if 'time_taken' not in eval_columns:
             cursor.execute('ALTER TABLE evaluations ADD COLUMN time_taken REAL')
             print("Added time_taken column to evaluations")
+        if 'token_usage' not in eval_columns:
+            cursor.execute('ALTER TABLE evaluations ADD COLUMN token_usage REAL')
+            print("Added token_usage column to evaluations")
+        # Ensure token_usage column type is REAL (not INTEGER) for compatibility
+        try:
+            cursor.execute("PRAGMA table_info(evaluations)")
+            eval_columns_info = cursor.fetchall()
+            token_usage_col = next((col for col in eval_columns_info if col[1] == 'token_usage'), None)
+            if token_usage_col and token_usage_col[2].upper() == 'INTEGER':
+                # SQLite doesn't support changing column types directly, but REAL can store integers
+                # So we'll just note it and continue
+                pass
+        except Exception as e:
+            print(f"Note: Could not check token_usage column type: {e}")
+        conn.commit()
     except Exception as e:
-        print(f"Note: Schema update check for evaluations time_taken: {e}")
+        print(f"Note: Schema update check for evaluations: {e}")
     
     # Add time_taken column to recruiter_handbooks table
     try:
@@ -973,7 +1169,7 @@ def init_db():
         # For now, teams are just strings: ITS, OSS, PCS, ISV, Core
         
         conn.commit()
-        print("✅ Initialized default admin user")
+        print("Initialized default admin user")
     except Exception as e:
         print(f"Note: User initialization: {e}")
     
@@ -1003,13 +1199,33 @@ def get_user_info(email):
     return None
 
 def create_or_update_user(email, name):
-    """Create or update user in database (default role: Recruiter)"""
+    """Create or update user in database (default role: Recruiter)
+    Preserves existing team and manager_email when updating to prevent data loss on login"""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
-    cursor.execute('''
-        INSERT OR REPLACE INTO users (email, name, role, updated_at)
-        VALUES (?, ?, COALESCE((SELECT role FROM users WHERE email = ?), 'Recruiter'), CURRENT_TIMESTAMP)
-    ''', (email, name, email))
+    
+    # Check if user already exists
+    cursor.execute('SELECT role, team, manager_email FROM users WHERE email = ?', (email,))
+    existing_user = cursor.fetchone()
+    
+    if existing_user:
+        # User exists - ONLY update name and updated_at, preserve everything else (role, team, manager_email)
+        # This prevents team and manager_email from being cleared on login
+        cursor.execute('''
+            UPDATE users 
+            SET name = ?, 
+                updated_at = CURRENT_TIMESTAMP
+            WHERE email = ?
+        ''', (name, email))
+        logging.info(f"Updated user {email}: preserved role, team, and manager_email")
+    else:
+        # New user - create with default role
+        cursor.execute('''
+            INSERT INTO users (email, name, role, team, manager_email, created_at, updated_at)
+            VALUES (?, ?, 'Recruiter', NULL, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ''', (email, name))
+        logging.info(f"Created new user {email} with default role 'Recruiter'")
+    
     conn.commit()
     conn.close()
 
@@ -1181,6 +1397,113 @@ def sanitize_resume_text(text):
     
     return text
 
+def convert_docx_to_pdf(docx_path, pdf_path=None):
+    """Convert DOCX file to PDF using reportlab"""
+    try:
+        if not os.path.exists(docx_path):
+            logging.error(f"DOCX file not found: {docx_path}")
+            return None
+        
+        # Generate PDF path if not provided
+        if not pdf_path:
+            pdf_path = os.path.splitext(docx_path)[0] + '.pdf'
+        
+        # Read DOCX content
+        doc = Document(docx_path)
+        
+        # Create PDF
+        pdf_buffer = BytesIO()
+        pdf_doc = SimpleDocTemplate(
+            pdf_buffer,
+            pagesize=A4,
+            rightMargin=50,
+            leftMargin=50,
+            topMargin=50,
+            bottomMargin=50
+        )
+        
+        # Define styles
+        styles = getSampleStyleSheet()
+        normal_style = ParagraphStyle(
+            'ResumeStyle',
+            parent=styles['Normal'],
+            fontSize=11,
+            leading=14,
+            spaceAfter=6,
+            alignment=TA_LEFT
+        )
+        
+        heading_style = ParagraphStyle(
+            'ResumeHeading',
+            parent=styles['Heading1'],
+            fontSize=14,
+            leading=16,
+            spaceAfter=12,
+            spaceBefore=12,
+            fontName='Helvetica-Bold'
+        )
+        
+        elements = []
+        
+        # Process paragraphs from DOCX
+        for para in doc.paragraphs:
+            text = para.text.strip()
+            if not text:
+                elements.append(Spacer(1, 6))
+                continue
+            
+            # Check if it's a heading (simple heuristic: if it's short and bold-like)
+            if len(text) < 100 and para.style.name.startswith('Heading'):
+                elements.append(Paragraph(text, heading_style))
+            else:
+                # Escape HTML special characters for reportlab
+                text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                elements.append(Paragraph(text, normal_style))
+            elements.append(Spacer(1, 6))
+        
+        # Process tables if any
+        for table in doc.tables:
+            table_data = []
+            for row in table.rows:
+                row_data = []
+                for cell in row.cells:
+                    cell_text = cell.text.strip().replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                    row_data.append(Paragraph(cell_text, normal_style))
+                table_data.append(row_data)
+            
+            if table_data:
+                pdf_table = Table(table_data)
+                pdf_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, 0), 10),
+                    ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                    ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                    ('GRID', (0, 0), (-1, -1), 1, colors.black)
+                ]))
+                elements.append(Spacer(1, 12))
+                elements.append(pdf_table)
+                elements.append(Spacer(1, 12))
+        
+        # Build PDF
+        pdf_doc.build(elements)
+        
+        # Save PDF to file
+        pdf_data = pdf_buffer.getvalue()
+        pdf_buffer.close()
+        
+        with open(pdf_path, 'wb') as f:
+            f.write(pdf_data)
+        
+        logging.info(f"Successfully converted DOCX to PDF: {docx_path} -> {pdf_path}")
+        return pdf_path
+        
+    except Exception as e:
+        logging.error(f"Error converting DOCX to PDF: {str(e)}", exc_info=True)
+        return None
+
 def extract_text_from_file(file_path):
     try:
         # Check if file_path is None or the string "NULL"
@@ -1262,7 +1585,7 @@ def hybrid_search(query, k=5):
         logging.error(f"Error in hybrid_search: {e}")
         return ""
 
-def save_evaluation(eval_id, filename, job_title, rank_score, missing_keywords, profile_summary, match_factors, job_stability, additional_info=None, oorwin_job_id=None, candidate_fit_analysis=None, over_under_qualification=None, user_email=None, time_taken=None):
+def save_evaluation(eval_id, filename, job_title, rank_score, missing_keywords, profile_summary, match_factors, job_stability, additional_info=None, oorwin_job_id=None, candidate_fit_analysis=None, over_under_qualification=None, user_email=None, time_taken=None, token_usage=None, resume_path=None):
     try:
         conn = sqlite3.connect('combined_db.db')
         cursor = conn.cursor()
@@ -1302,6 +1625,14 @@ def save_evaluation(eval_id, filename, job_title, rank_score, missing_keywords, 
         job_title_str = str(job_title)
         profile_summary_str = str(profile_summary)
         
+        # Handle resume_path - store ONLY filename in DB for portability
+        # If resume_path is a full/relative path, strip down to basename.
+        if resume_path:
+            resume_path_str = os.path.basename(str(resume_path))
+        else:
+            # Fallback: use filename as the stored resume identifier
+            resume_path_str = os.path.basename(filename_str) if filename_str else None
+        
         # Handle oorwin_job_id (can be None or empty string)
         oorwin_job_id_str = str(oorwin_job_id).strip() if oorwin_job_id else None
         if oorwin_job_id_str == '' or oorwin_job_id_str == 'None':
@@ -1321,6 +1652,15 @@ def save_evaluation(eval_id, filename, job_title, rank_score, missing_keywords, 
         candidate_fit_analysis_json = json.dumps(candidate_fit_analysis) if candidate_fit_analysis else '{}'
         over_under_qualification_str = str(over_under_qualification) if over_under_qualification else ''
         
+        # Convert token_usage to integer if it's a float or string
+        if token_usage is not None:
+            try:
+                token_usage_int = int(float(token_usage)) if token_usage else None
+            except (ValueError, TypeError):
+                token_usage_int = None
+        else:
+            token_usage_int = None
+        
         # Debug: Log the actual values being inserted
         logging.info(f"Values to insert - eval_id: {eval_id}, filename: {filename_str}, job_title: {job_title_str}")
         logging.info(f"JSON values - missing_keywords_json type: {type(missing_keywords_json)}, value: {missing_keywords_json[:100] if len(missing_keywords_json) > 100 else missing_keywords_json}")
@@ -1339,9 +1679,9 @@ def save_evaluation(eval_id, filename, job_title, rank_score, missing_keywords, 
         # match_factors, profile_summary, missing_keywords, 
         # job_stability, career_progression, technical_questions,
         # nontechnical_questions, behavioral_questions, oorwin_job_id, 
-        # candidate_fit_analysis, over_under_qualification, user_email, timestamp
+        # candidate_fit_analysis, over_under_qualification, time_taken, token_usage, user_email, timestamp
         params = (
-            filename_str,                    # resume_path
+            resume_path_str,                # resume_path (full path to file)
             filename_str,                    # filename
             job_title_str,                   # job_title
             "",                             # job_description
@@ -1358,6 +1698,7 @@ def save_evaluation(eval_id, filename, job_title, rank_score, missing_keywords, 
             candidate_fit_analysis_json,     # candidate_fit_analysis
             over_under_qualification_str,    # over_under_qualification
             time_taken,                      # time_taken (in seconds, can be None)
+            token_usage_int,                 # token_usage (converted to int, can be None)
             user_email_str,                  # user_email
             timestamp_str                    # timestamp
         )
@@ -1373,8 +1714,8 @@ def save_evaluation(eval_id, filename, job_title, rank_score, missing_keywords, 
                 match_factors, profile_summary, missing_keywords, 
                 job_stability, career_progression, technical_questions,
                 nontechnical_questions, behavioral_questions, oorwin_job_id, 
-                candidate_fit_analysis, over_under_qualification, time_taken, user_email, timestamp
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                candidate_fit_analysis, over_under_qualification, time_taken, token_usage, user_email, timestamp
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             params
             )
@@ -1394,10 +1735,24 @@ def save_evaluation(eval_id, filename, job_title, rank_score, missing_keywords, 
         
         conn.close()
         return db_id  # Return the database ID instead of True
+    except sqlite3.OperationalError as e:
+        error_msg = str(e)
+        logging.error(f"Database operational error in save_evaluation: {error_msg}", exc_info=True)
+        # Check if it's a missing column error
+        if "no such column" in error_msg.lower():
+            logging.error("Database schema mismatch detected. Please run init_db() to update schema.")
+            # Try to update schema automatically
+            try:
+                update_db_schema()
+                logging.info("Attempted to update database schema")
+            except Exception as schema_error:
+                logging.error(f"Failed to update schema: {schema_error}")
+        return False
     except Exception as e:
         logging.error(f"Database error in save_evaluation: {str(e)}", exc_info=True)
         logging.error(f"Data being saved - eval_id: {eval_id}, filename: {filename}, job_title: {job_title}")
         logging.error(f"Data types - rank_score: {type(rank_score)}, missing_keywords: {type(missing_keywords)}")
+        logging.error(f"Token usage value: {token_usage}, type: {type(token_usage)}")
         return False
 
 def save_feedback(evaluation_id, rating, comments):
@@ -1776,7 +2131,7 @@ def view_evaluation(eval_id):
                 e.id, e.filename, e.job_title, e.job_description,
                 e.match_percentage, e.match_factors, e.profile_summary,
                 e.missing_keywords, e.job_stability, e.career_progression,
-                e.oorwin_job_id, e.timestamp
+                e.oorwin_job_id, e.timestamp, e.resume_path
             FROM evaluations e
             WHERE e.id = ?
         ''', (eval_id,))
@@ -1799,6 +2154,51 @@ def view_evaluation(eval_id):
         
         # Parse JSON fields
         import json
+        resume_path_from_db = row[12] if len(row) > 12 else None
+        
+        # Normalize the path (handle Windows backslashes, remove quotes, etc.)
+        if resume_path_from_db:
+            resume_path_from_db = str(resume_path_from_db).strip().strip('"').strip("'")
+            # Normalize path separators
+            resume_path_from_db = os.path.normpath(resume_path_from_db)
+            # Check if file actually exists
+            if not os.path.exists(resume_path_from_db):
+                logging.warning(f"Resume file not found at path: {resume_path_from_db}")
+                resume_path_from_db = None
+        
+        # If resume_path is missing or empty, construct it from filename (for backward compatibility)
+        if not resume_path_from_db or resume_path_from_db == 'None' or resume_path_from_db == '':
+            filename = row[1] if row[1] else ''
+            if filename:
+                # Construct path from filename
+                resume_path_from_db = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+                resume_path_from_db = os.path.normpath(resume_path_from_db)
+                # Check if file actually exists
+                if not os.path.exists(resume_path_from_db):
+                    logging.warning(f"Resume file not found at constructed path: {resume_path_from_db}")
+                    resume_path_from_db = None
+            else:
+                resume_path_from_db = None
+        
+        # If we have a DOCX path, try to convert it to PDF or find existing PDF
+        if resume_path_from_db and resume_path_from_db.lower().endswith('.docx'):
+            # Check if PDF version already exists
+            pdf_path = os.path.splitext(resume_path_from_db)[0] + '.pdf'
+            pdf_path = os.path.normpath(pdf_path)
+            if os.path.exists(pdf_path):
+                logging.info(f"[VIEW] Found existing PDF version: {pdf_path}")
+                resume_path_from_db = pdf_path
+            else:
+                # Try to convert DOCX to PDF on-the-fly
+                logging.info(f"[VIEW] Attempting to convert DOCX to PDF for old evaluation: {resume_path_from_db}")
+                converted_pdf = convert_docx_to_pdf(resume_path_from_db)
+                if converted_pdf and os.path.exists(converted_pdf):
+                    logging.info(f"[VIEW] ✅ Successfully converted DOCX to PDF: {converted_pdf}")
+                    resume_path_from_db = os.path.normpath(converted_pdf)
+                else:
+                    logging.warning(f"[VIEW] ⚠️ Could not convert DOCX to PDF, merging won't work: {resume_path_from_db}")
+                    # Keep DOCX path but merging will fail (user will see error)
+        
         evaluation = {
             'id': row[0],
             'filename': row[1],
@@ -1811,7 +2211,8 @@ def view_evaluation(eval_id):
             'job_stability': json.loads(row[8]) if row[8] else {},
             'career_progression': json.loads(row[9]) if row[9] else {},
             'oorwin_job_id': row[10],
-            'timestamp': row[11]
+            'timestamp': row[11],
+            'resume_path': resume_path_from_db  # resume_path (constructed if missing)
         }
         
         # Helper function to normalize questions (convert objects to strings)
@@ -2209,12 +2610,170 @@ def submit_handbook_feedback():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 # HR Assistant Routes
+def get_info_buddy_generation_config(long_answer: bool) -> dict:
+    """Return generation and retrieval config for Info Buddy answers.
+
+    - Short answers: lower max_tokens and shallower retrieval
+    - Long answers:  higher max_tokens and deeper retrieval
+    """
+    return {
+        "max_tokens": 1200 if long_answer else 50,  # very strict budget for short answers (50 tokens ≈ 35-40 words)
+        "retrieval_top_k": 6 if long_answer else 3,
+    }
+
+
+def build_info_buddy_online_prompt(expanded_question: str, long_answer: bool) -> str:
+    """Build the prompt for Info Buddy in ONLINE mode."""
+    if long_answer:
+        # Detailed / long answer
+        return f"""You are an expert AI assistant. Provide a comprehensive and detailed answer to the following question. Your response should be thorough, well-structured, and accurate.
+
+Question: {expanded_question}
+
+Instructions:
+1. Use your knowledge to provide a complete answer.
+2. If the question is about HR policies, benefits, or company-specific information, note that you may not have the latest company-specific details.
+3. Format your response with clear sections and bullet points where appropriate.
+4. Include relevant examples and context.
+5. If you're uncertain about specific facts, mention that.
+"""
+    else:
+        # Short / concise answer
+        return f"""You are an expert AI assistant. Provide a **very concise** answer to the following question.
+
+Question: {expanded_question}
+
+Instructions for brevity (STRICT - ENFORCE STRICTLY):
+1. Your entire answer MUST be under 40 words (approximately 30-35 words).
+2. Use ONLY 2-3 very short bullet points OR a single 2-sentence paragraph.
+3. NO headings, NO sections, NO deep dives, NO tables.
+4. Highlight ONLY the single most critical point the user needs to know.
+5. Be direct and brief. Stop immediately after the key information.
+"""
+
+
+def build_info_buddy_rag_prompt(expanded_question: str, context: str, long_answer: bool) -> str:
+    """Build the prompt for Info Buddy in RAG (offline) mode."""
+    if context:
+        if long_answer:
+            # Detailed / long RAG answer
+            return f"""You are an expert HR Assistant. Answer the question STRICTLY based on the provided context from company policy documents.
+
+Question: {expanded_question}
+
+Context from Company Documents:
+{context}
+
+STRICT RULES FOR FORMATTING:
+
+1. **ONLY use information from the context provided above.** Do not use external knowledge.
+
+2. **TABLE FORMATTING (CRITICAL)**:
+   - If the context contains tables (look for markers like [TABLE DATA] ... [END TABLE]), you MUST reproduce the markdown table **verbatim** from the context.
+   - Use this EXACT format:
+     ```
+     | Column 1 | Column 2 | Column 3 |
+     |---------|---------|----------|
+     | Data 1  | Data 2  | Data 3   |
+     | Data 4  | Data 5  | Data 6   |
+     ```
+   - Always include the header separator row (|---------|---------|).
+   - Keep table columns aligned and readable.
+   - If a table is complex, break it into smaller, clearer tables.
+   - Add a brief title above each table (e.g., "### Performance Rating Table").
+
+3. **RESPONSE STRUCTURE**:
+   - Start with a brief 1–2 sentence summary.
+   - Use clear headings (## for main sections, ### for subsections).
+   - Use bullet points (• or -) for lists, NOT long paragraphs.
+   - Add blank lines between sections for readability.
+   - Keep paragraphs SHORT (3–4 sentences max).
+   - Use bold (**text**) for key terms and important points.
+
+4. **SOURCE CITATION**:
+   - **ALWAYS cite sources using actual document names** (e.g., "According to [Leave Policy.pdf, page 5]").
+   - Place citations at the END of sentences or paragraphs, not mid-sentence.
+   - Format: `[Document Name.pdf, page X]`.
+   - Use actual filename, not generic "Source 1" or "Source 2".
+
+5. **READABILITY ENHANCEMENTS**:
+   - Break dense information into digestible chunks.
+   - Use numbered lists (1., 2., 3.) for step-by-step processes.
+   - Use bullet lists (•) for features, benefits, or items.
+   - Add horizontal rules (---) to separate major sections.
+   - Use emojis sparingly for visual breaks (✅, 📋, 📊, etc.).
+
+6. **EXAMPLE OF GOOD FORMATTING**:
+   ```
+   ## Performance Appraisal Policy
+   
+   The performance appraisal policy outlines how employees are evaluated annually.
+   
+   ### Key Features
+   • Appraisals are conducted yearly (April to March).
+   • Based on previously agreed KRAs.
+   • Results can lead to salary hikes or promotions.
+   
+   ### Performance Rating Table
+   | Score | Rating      | Description                           |
+   |-------|-------------|---------------------------------------|
+   | 5     | Exceptional | Targets met at 200% or above         |
+   | 4     | Outstanding | Targets exceeded significantly       |
+   | 3     | Good        | Consistently met expectations        |
+   
+   [APPRAISAL & PROMOTION POLICY.pdf, page 1]
+   ```
+
+7. **IMPORTANT**: If the question cannot be answered from the provided context, you MUST respond with:
+   - "I'm sorry, but the information about '[topic]' is not available in our company policy documents."
+   - "💡 **Suggestion**: Please enable the **'Go Online'** toggle and try asking your question again."
+
+8. DO NOT make up information or use knowledge outside the provided context.
+
+Answer:"""
+        else:
+            # Short / concise RAG answer
+            return f"""You are an expert HR Assistant. Answer the question STRICTLY based on the provided context from company policy documents.
+
+Question: {expanded_question}
+
+Context from Company Documents:
+{context}
+
+Instructions for a SHORT answer (STRICT - ENFORCE STRICTLY):
+1. Your entire answer MUST be under 40 words (approximately 30-35 words).
+2. Use ONLY 2-3 very short bullet points OR a single 2-sentence paragraph.
+3. Focus ONLY on the single most critical policy rule or action the user needs to know.
+4. NO tables, NO headings, NO sections, NO deep dives.
+5. Cite sources briefly like `[Document.pdf, page X]` at the end if space allows.
+6. Do NOT invent information outside the context.
+7. Be direct and brief. Stop immediately after the key information.
+
+Short Answer:"""
+    # No context found - give helpful message and gently suggest online mode
+    return f"""The question "{expanded_question}" could not be answered from the available company policy documents.
+
+Please note:
+- The information may not be in the current knowledge base.
+- The document may need to be updated or added.
+- You can try rephrasing the question or enabling "Go Online" mode for general information.
+
+Would you like to:
+1. Try rephrasing your question
+2. Enable "Go Online" mode for general information
+3. Contact HR for company-specific policies not yet in the system?"""
+
+
 @app.route('/api/ask', methods=['POST'])
 def ask_question():
     try:
         data = request.get_json()
         question = data.get('question')
         online_mode = data.get('online_mode', False)
+        # Control answer length from frontend (Info Buddy)
+        # long_answer=True  -> detailed response
+        # long_answer=False -> concise/short response
+        long_answer = data.get('long_answer', False)
 
         if not question:
             return jsonify({'error': 'No question provided'}), 400
@@ -2232,22 +2791,16 @@ def ask_question():
                 # Expand acronyms in the question
                 expanded_question = expand_acronyms(question)
 
+                # Configure generation and retrieval depth based on answer length
+                config = get_info_buddy_generation_config(long_answer)
+                max_tokens = config["max_tokens"]
+                retrieval_top_k = config["retrieval_top_k"]
+
                 if online_mode:
                     # ONLINE MODE: Answer any general question using LLM knowledge
                     # No RAG constraints - can answer anything
-                    detailed_prompt = f"""You are an expert AI assistant. Provide a comprehensive and detailed answer to the following question. Your response should be thorough, well-structured, and accurate.
-
-                    Question: {expanded_question}
-
-                    Instructions:
-                    1. Use your knowledge to provide a complete answer
-                    2. If the question is about HR policies, benefits, or company-specific information, note that you may not have the latest company-specific details
-                    3. Format your response with clear sections and bullet points where appropriate
-                    4. Include relevant examples and context
-                    5. If you're uncertain about specific facts, mention that
-                    """
-                    
-                    response = generate_content_unified(detailed_prompt, stream=True)
+                    detailed_prompt = build_info_buddy_online_prompt(expanded_question, long_answer)
+                    response = generate_content_unified(detailed_prompt, stream=True, max_tokens=max_tokens)
                     for chunk in response:
                         if chunk.text:
                             complete_response.append(chunk.text)
@@ -2259,9 +2812,9 @@ def ask_question():
                     # Step 1: Hybrid retrieval - combine BM25 and Vector search
                     all_retrieved_docs = []
                     
-                    # Vector search (semantic similarity) - increased k for better coverage
+                    # Vector search (semantic similarity)
                     if vectorstore is not None:
-                        vector_docs = vectorstore.similarity_search(expanded_question, k=15)
+                        vector_docs = vectorstore.similarity_search(expanded_question, k=retrieval_top_k)
                         all_retrieved_docs.extend([(doc, 'vector') for doc in vector_docs])
                         logging.info(f"🔍 Vector search retrieved {len(vector_docs)} documents")
                     
@@ -2271,8 +2824,8 @@ def ask_question():
                             query_tokens = expanded_question.lower().split()
                             bm25_scores = bm25_index.get_scores(query_tokens)
                             
-                            # Get top BM25 results - increased k for better coverage
-                            top_indices = sorted(range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True)[:10]
+                            # Get top BM25 results - depth controlled by retrieval_top_k
+                            top_indices = sorted(range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True)[:retrieval_top_k]
                             bm25_results = []
                             for idx in top_indices:
                                 if bm25_scores[idx] > 0:  # Only include relevant results
@@ -2309,7 +2862,7 @@ def ask_question():
                     # Step 3: Prioritize tables and limit context window
                     # Tables first (they're often most precise), then text chunks
                     prioritized_docs = table_docs + text_docs
-                    context_docs = prioritized_docs[:12]  # Take top 12 for context
+                    context_docs = prioritized_docs[:retrieval_top_k]  # Depth controlled by answer length
                     
                     # Step 4: Build context with proper source citations (filename + page)
                     if context_docs:
@@ -2342,105 +2895,9 @@ def ask_question():
                         context = ""
                         logging.warning("⚠️ No documents retrieved from knowledge base")
                     
-                    # Step 5: Enhanced RAG prompt with strict enforcement
-                    if context:
-                        prompt = f"""You are an expert HR Assistant. Answer the question STRICTLY based on the provided context from company policy documents.
-
-                    Question: {expanded_question}
-                    
-                    Context from Company Documents:
-                    {context}
-
-                    STRICT RULES FOR FORMATTING:
-                    
-                    1. **ONLY use information from the context provided above.** Do not use external knowledge.
-                    
-                    2. **TABLE FORMATTING (CRITICAL)**:
-                       - If the context contains tables (look for markers like [TABLE DATA] ... [END TABLE]), you MUST reproduce the markdown table **verbatim** from the context
-                       - Use this EXACT format:
-                         ```
-                         | Column 1 | Column 2 | Column 3 |
-                         |---------|---------|----------|
-                         | Data 1  | Data 2  | Data 3   |
-                         | Data 4  | Data 5  | Data 6   |
-                         ```
-                       - Always include the header separator row (|---------|---------|)
-                       - Keep table columns aligned and readable
-                       - If a table is complex, break it into smaller, clearer tables
-                       - Add a brief title above each table (e.g., "### Performance Rating Table")
-                    
-                    3. **RESPONSE STRUCTURE**:
-                       - Start with a brief 1-2 sentence summary
-                       - Use clear headings (## for main sections, ### for subsections)
-                       - Use bullet points (• or -) for lists, NOT long paragraphs
-                       - Add blank lines between sections for readability
-                       - Keep paragraphs SHORT (3-4 sentences max)
-                       - Use bold (**text**) for key terms and important points
-                    
-                    4. **SOURCE CITATION**:
-                       - **ALWAYS cite sources using actual document names** (e.g., "According to [Leave Policy.pdf, page 5]")
-                       - Place citations at the END of sentences or paragraphs, not mid-sentence
-                       - Format: `[Document Name.pdf, page X]`
-                       - Use actual filename, not generic "Source 1" or "Source 2"
-                    
-                    5. **READABILITY ENHANCEMENTS**:
-                       - Break dense information into digestible chunks
-                       - Use numbered lists (1., 2., 3.) for step-by-step processes
-                       - Use bullet lists (•) for features, benefits, or items
-                       - Add horizontal rules (---) to separate major sections
-                       - Use emojis sparingly for visual breaks (✅, 📋, 📊, etc.)
-                    
-                    6. **EXAMPLE OF GOOD FORMATTING**:
-                       ```
-                       ## Performance Appraisal Policy
-                       
-                       The performance appraisal policy outlines how employees are evaluated annually.
-                       
-                       ### Key Features
-                       • Appraisals are conducted yearly (April to March)
-                       • Based on previously agreed KRAs
-                       • Results can lead to salary hikes or promotions
-                       
-                       ### Performance Rating Table
-                       | Score | Rating | Description |
-                       |-------|--------|-------------|
-                       | 5     | Exceptional | Targets met at 200% or above |
-                       | 4     | Outstanding | Targets exceeded significantly |
-                       | 3     | Good | Consistently met expectations |
-                       
-                       [APPRAISAL & PROMOTION POLICY.pdf, page 1]
-                       ```
-                    
-                    7. **IMPORTANT**: If the question cannot be answered from the provided context, you MUST respond with:
-                       - "I'm sorry, but the information about '[topic]' is not available in our company policy documents."
-                       - "💡 **Suggestion**: Please enable the **'Go Online'** toggle and try asking your question again."
-                    
-                    8. DO NOT make up information or use knowledge outside the provided context.
-                    
-                    Answer:"""
-                    else:
-                        # No context found - give helpful message
-                        prompt = f"""The question "{expanded_question}" could not be answered from the available company policy documents.
-
-                    Please note:
-                    - The information may not be in the current knowledge base
-                    - The document may need to be updated or added
-                    - You can try rephrasing the question or enabling "Go Online" mode for general information
-                    
-                    Would you like to:
-                    1. Try rephrasing your question
-                    2. Enable "Go Online" mode for general information
-                    3. Contact HR for company-specific policies not yet in the system"""
-                        
-                        # Still generate response but with this constraint
-                        response = generate_content_unified(prompt, stream=True)
-                        for chunk in response:
-                            if chunk.text:
-                                complete_response.append(chunk.text)
-                                yield chunk.text
-                        return
-                    
-                    response = generate_content_unified(prompt, stream=True)
+                    # Step 5: Build RAG prompt (short or long) and generate answer
+                    prompt = build_info_buddy_rag_prompt(expanded_question, context, long_answer)
+                    response = generate_content_unified(prompt, stream=True, max_tokens=max_tokens)
                     for chunk in response:
                         if chunk.text:
                             complete_response.append(chunk.text)
@@ -2524,6 +2981,81 @@ def extract_json_from_text(text):
                     return text[start_idx:i+1]
     
     return None
+
+async def async_groq_generate_for_scoring(prompt):
+    """Async wrapper for Groq generation with temperature 0 for consistent scoring"""
+    global groq_client
+    try:
+        # Runtime check: if client is not initialized, try to initialize it
+        if not groq_client:
+            # Reload environment variables
+            BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+            ENV_PATH = os.path.join(BASE_DIR, '.env')
+            load_dotenv(ENV_PATH, override=True)
+            
+            # Get API key again
+            api_key = os.getenv("GROQ_API_KEY", "").strip()
+            if not api_key:
+                raise RuntimeError("Groq client not initialized. Please set GROQ_API_KEY in .env file.")
+            
+            # Try to initialize
+            try:
+                groq_client = Groq(api_key=api_key)
+                logging.info("[RUNTIME] Groq client initialized successfully")
+            except Exception as e:
+                raise RuntimeError(f"Failed to initialize Groq client: {str(e)}. Please check your GROQ_API_KEY in .env file.")
+        
+        # Use Groq with temperature 0 for deterministic scoring
+        is_reasoning_model = any(x in GROQ_MODEL.lower() for x in ["gpt-oss", "o1-", "o3-"])
+        supports_temperature = not is_reasoning_model
+        
+        params = {
+            "model": GROQ_MODEL,
+            "messages": [
+                {"role": "system", "content": "You are an expert HR analyst and technical recruiter."},
+                {"role": "user", "content": prompt}
+            ],
+            "max_completion_tokens": 16384
+        }
+        
+        # Set temperature to 0 for scoring (deterministic results)
+        if supports_temperature:
+            params["temperature"] = 0.0
+        else:
+            logging.warning(f"Model {GROQ_MODEL} is a reasoning model and doesn't support temperature. Using default.")
+        
+        # Add reasoning_effort for reasoning models
+        if is_reasoning_model:
+            params["reasoning_effort"] = GROQ_REASONING_EFFORT
+        
+        response = groq_client.chat.completions.create(**params)
+        
+        # Extract content and token usage
+        if not response.choices:
+            raise Exception("Groq returned empty choices")
+        
+        message = response.choices[0].message
+        content = message.content
+        
+        if not content:
+            raise Exception(f"Groq returned empty content. Finish reason: {response.choices[0].finish_reason}")
+        
+        # Get token usage from response
+        token_usage = None
+        if hasattr(response, 'usage') and response.usage:
+            if hasattr(response.usage, 'total_tokens'):
+                token_usage = response.usage.total_tokens
+            elif isinstance(response.usage, dict) and 'total_tokens' in response.usage:
+                token_usage = response.usage['total_tokens']
+        
+        # Return both content and token usage
+        response_obj = UnifiedModelResponse(content)
+        response_obj.token_usage = token_usage
+        return response_obj
+        
+    except Exception as e:
+        logging.error(f"❌ Groq generation error: {str(e)}", exc_info=True)
+        raise
 
 async def async_gemini_generate(prompt):
     """Async wrapper for model generation (Gemini or OpenAI) with improved JSON handling"""
@@ -2634,7 +3166,7 @@ async def async_gemini_generate(prompt):
                         if "JD Match" in str(prompt):
                             return get_default_resume_evaluation()
                         else:
-                    return get_default_career_analysis()
+                            return get_default_career_analysis()
                     # Double-check it has expected keys for resume evaluation
                     if "JD Match" in str(prompt) and "JD Match" not in parsed:
                         logging.error(f"❌ Parsed dict missing 'JD Match' key")
@@ -2650,7 +3182,7 @@ async def async_gemini_generate(prompt):
                     # Check if this is a resume evaluation prompt (has "JD Match" in prompt)
                     if "JD Match" in str(prompt):
                         return get_default_resume_evaluation()
-            else:
+                    else:
                         return get_default_career_analysis()
             else:
                 logging.error(f"❌ No JSON object found in response")
@@ -2659,7 +3191,7 @@ async def async_gemini_generate(prompt):
                 if "JD Match" in str(prompt):
                     return get_default_resume_evaluation()
                 else:
-                return get_default_career_analysis()
+                    return get_default_career_analysis()
                 
     except Exception as e:
         logging.error(f"❌ Model generation error: {str(e)}", exc_info=True)
@@ -2669,7 +3201,7 @@ async def async_gemini_generate(prompt):
         if "JD Match" in str(prompt):
             return get_default_resume_evaluation()
         else:
-        return get_default_career_analysis()
+            return get_default_career_analysis()
 
 async def async_analyze_stability(resume_text):
     """Async job stability analysis"""
@@ -2801,7 +3333,23 @@ async def evaluate_resume():
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(file_path)
 
-        # Extract text from resume
+        # Convert DOCX to PDF if needed, and get the PDF path for merging
+        pdf_path = None
+        file_ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
+        if file_ext == 'docx':
+            # Convert DOCX to PDF
+            pdf_path = convert_docx_to_pdf(file_path)
+            if pdf_path:
+                logging.info(f"Converted DOCX to PDF: {pdf_path}")
+            else:
+                logging.warning(f"Failed to convert DOCX to PDF, will use original file: {file_path}")
+                pdf_path = file_path  # Fallback to original
+        elif file_ext == 'pdf':
+            pdf_path = file_path  # Already a PDF
+        else:
+            pdf_path = file_path  # Fallback
+
+        # Extract text from resume (use original file path for text extraction)
         resume_text = extract_text_from_file(file_path)
         if resume_text is None:
             return jsonify({'error': 'Failed to extract text from file'}), 500
@@ -2859,8 +3407,8 @@ async def evaluate_resume():
         # Get user email from session
         user_email = session.get('user', {}).get('email') if 'user' in session else None
         
-        # Save evaluation to database with additional info
-        db_id = save_evaluation(eval_id, filename, job_title, match_percentage, missing_keywords, profile_summary, match_factors, stability_data, additional_info, None, candidate_fit_analysis, over_under_qualification, user_email)
+        # Save evaluation to database with additional info (use PDF path for resume_path)
+        db_id = save_evaluation(eval_id, filename, job_title, match_percentage, missing_keywords, profile_summary, match_factors, stability_data, additional_info, None, candidate_fit_analysis, over_under_qualification, user_email, resume_path=pdf_path)
         if db_id:
             # Generate interview questions asynchronously
             questions_data = await async_generate_questions(resume_text, job_description, profile_summary)
@@ -2870,12 +3418,17 @@ async def evaluate_resume():
             behavioral_questions = QUICK_CHECKS
 
             # Save interview questions with proper JSON encoding (use database ID)
-            if save_interview_questions(db_id, 
-                                     json.dumps(technical_questions), 
-                                     json.dumps(nontechnical_questions), 
-                                     json.dumps(behavioral_questions)):
+            if save_interview_questions(
+                db_id,
+                json.dumps(technical_questions),
+                json.dumps(nontechnical_questions),
+                json.dumps(behavioral_questions),
+            ):
+                # IMPORTANT: return the actual DB primary key (db_id), not the UUID eval_id.
+                # The evaluation view, /api/evaluation-full/<id>, and download endpoints
+                # all expect the SQLite autoincrement id.
                 return jsonify({
-                    'id': eval_id,
+                    'id': db_id,
                     'match_percentage': match_percentage,
                     'match_percentage_str': match_percentage_str,
                     'missing_keywords': missing_keywords,
@@ -2926,8 +3479,44 @@ def evaluate_resume_stream():
         filename = secure_filename(file.filename)
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(file_path)
+        file_path = os.path.normpath(file_path)  # Normalize path
 
-        # Extract text from resume
+        # Convert DOCX to PDF if needed, and get the PDF path for merging
+        pdf_path = None
+        file_ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
+        logging.info(f"[UPLOAD] File extension: {file_ext}, Original file path: {file_path}")
+        
+        if file_ext == 'docx':
+            # Convert DOCX to PDF
+            logging.info(f"[CONVERSION] Attempting to convert DOCX to PDF: {file_path}")
+            pdf_path = convert_docx_to_pdf(file_path)
+            if pdf_path:
+                pdf_path = os.path.normpath(pdf_path)  # Normalize PDF path
+                if os.path.exists(pdf_path):
+                    logging.info(f"[CONVERSION] ✅ Successfully converted DOCX to PDF: {pdf_path}")
+                else:
+                    logging.error(f"[CONVERSION] ❌ PDF file not found after conversion: {pdf_path}")
+                    pdf_path = None
+            else:
+                logging.error(f"[CONVERSION] ❌ Conversion function returned None")
+                pdf_path = None
+            
+            # If conversion failed, we can't merge, but we'll still save the evaluation
+            if not pdf_path:
+                logging.warning(f"[CONVERSION] ⚠️ Will save DOCX path (merging won't work): {file_path}")
+                pdf_path = file_path  # Fallback to original
+        elif file_ext == 'pdf':
+            pdf_path = file_path  # Already a PDF
+            logging.info(f"[UPLOAD] File is already a PDF: {pdf_path}")
+        else:
+            pdf_path = file_path  # Fallback
+            logging.warning(f"[UPLOAD] Unknown file extension, using original path: {pdf_path}")
+        
+        logging.info(f"[SAVE] Final resume_path to save in database: {pdf_path}")
+        logging.info(f"[DEBUG] PDF PATH: {pdf_path}")
+        logging.info(f"[DEBUG] Exists at save time: {os.path.exists(pdf_path) if pdf_path else False}")
+
+        # Extract text from resume (use original file path for text extraction)
         resume_text = extract_text_from_file(file_path)
         if resume_text is None:
             return jsonify({'error': 'Failed to extract text from file'}), 500
@@ -2941,112 +3530,237 @@ def evaluate_resume_stream():
         # Track start time for performance metrics
         import time
         start_time = time.time()
+        
+        # Capture filename, pdf_path, and file_path for use in generator function
+        captured_filename = filename
+        captured_pdf_path = pdf_path
+        captured_file_path = file_path
 
         def generate():
             try:
                 # Send initial response
                 yield f"data: {json.dumps({'status': 'processing', 'message': 'Analyzing resume...', 'eval_id': eval_id})}\n\n"
                 
-                # Step 1: Main resume analysis (most important - show results immediately)
+                # SINGLE API CALL: Unified evaluation (all analyses in one call)
                 yield f"data: {json.dumps({'status': 'step1', 'message': 'Evaluating resume against job requirements...'})}\n\n"
-                formatted_prompt = input_prompt_template.format(
+                formatted_prompt = unified_evaluation_prompt.format(
                     resume_text=resume_text,
                     job_description=job_description,
                     additional_context_block=additional_context_block
                 )
+                
+                # Use Groq with temperature 0 for consistent scoring
+                total_tokens_used = 0
                 try:
-                main_response = asyncio.run(async_gemini_generate(formatted_prompt))
+                    # Runtime check: if client is not initialized, try to initialize it
+                    global groq_client
+                    if not groq_client:
+                        # Reload environment variables
+                        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+                        ENV_PATH = os.path.join(BASE_DIR, '.env')
+                        load_dotenv(ENV_PATH, override=True)
+                        
+                        # Get API key again
+                        api_key = os.getenv("GROQ_API_KEY", "").strip()
+                        if not api_key:
+                            raise RuntimeError("Groq client not initialized. Please set GROQ_API_KEY in .env file.")
+                        
+                        # Try to initialize
+                        try:
+                            groq_client = Groq(api_key=api_key)
+                            logging.info("[RUNTIME] Groq client initialized successfully in stream function")
+                        except Exception as e:
+                            raise RuntimeError(f"Failed to initialize Groq client: {str(e)}. Please check your GROQ_API_KEY in .env file.")
+                    
+                    # SINGLE API CALL - Get all analyses at once
+                    logging.info("[UNIFIED] Making single API call for complete evaluation...")
+                    groq_response = asyncio.run(async_groq_generate_for_scoring(formatted_prompt))
+                    
+                    # Extract token usage
+                    if hasattr(groq_response, 'token_usage') and groq_response.token_usage:
+                        total_tokens_used = groq_response.token_usage
+                        logging.info(f"[UNIFIED] Token usage for complete evaluation: {total_tokens_used}")
+                    
+                    # Parse the response using the same logic as async_gemini_generate
+                    response_text = groq_response.text if hasattr(groq_response, 'text') else str(groq_response)
+                    if not response_text:
+                        raise ValueError("Empty response from Groq")
+                    
+                    response_text = response_text.strip()
+                    # Remove markdown code block markers if present
+                    response_text = re.sub(r'^```json\s*', '', response_text, flags=re.MULTILINE)
+                    response_text = re.sub(r'^```\s*', '', response_text, flags=re.MULTILINE)
+                    response_text = re.sub(r'\s*```$', '', response_text)
+                    response_text = response_text.strip()
+                    
+                    if response_text.startswith("```") and response_text.endswith("```"):
+                        response_text = response_text[3:-3].strip()
+                    
+                    first_char = response_text.strip()[0] if response_text.strip() else ''
+                    if first_char != '{':
+                        json_start = response_text.find('{')
+                        if json_start > 0:
+                            response_text = response_text[json_start:]
+                    
+                    if not response_text.startswith('{'):
+                        raise ValueError("Response doesn't contain valid JSON")
+                    
+                    unified_response = json.loads(response_text)
+                    if not isinstance(unified_response, dict):
+                        raise ValueError("Parsed JSON is not a dict")
+                    
+                    logging.info(f"[UNIFIED] ✅ Received unified response with keys: {list(unified_response.keys())}")
+                    
                 except Exception as gen_error:
-                    logging.error(f"❌ Error calling async_gemini_generate: {type(gen_error).__name__}: {str(gen_error)}")
+                    error_msg = str(gen_error)
+                    logging.error(f"❌ Error calling Groq API: {type(gen_error).__name__}: {error_msg}")
                     logging.error(f"   Full traceback:", exc_info=True)
-                    yield f"data: {json.dumps({'status': 'error', 'message': f'AI generation failed: {str(gen_error)}'})}\n\n"
+                    yield f"data: {json.dumps({'status': 'error', 'message': f'AI generation failed: {error_msg}'})}\n\n"
                     return
                 
-                # Debug logging (reduced for performance)
-                # logging.info(f"🔍 Main response type: {type(main_response)}")
-                # logging.info(f"🔍 Main response value (first 200 chars): {str(main_response)[:200]}")
-                
-                if not main_response:
-                    logging.error("❌ main_response is empty/None")
+                # Verify unified response
+                if not unified_response:
+                    logging.error("❌ unified_response is empty/None")
                     yield f"data: {json.dumps({'status': 'error', 'message': 'Failed to analyze resume - empty response'})}\n\n"
                     return
                 
                 # Verify it's a dictionary
-                if not isinstance(main_response, dict):
-                    logging.error(f"❌ main_response is not a dict!")
-                    logging.error(f"   Type: {type(main_response)}")
-                    logging.error(f"   Value (repr): {repr(main_response)[:500]}")
-                    logging.error(f"   Value (str): {str(main_response)[:500]}")
-                    logging.error(f"   This suggests JSON parsing failed and returned a string fragment")
-                    yield f"data: {json.dumps({'status': 'error', 'message': f'Invalid response format from AI. Expected dict, got {type(main_response).__name__}'})}\n\n"
+                if not isinstance(unified_response, dict):
+                    logging.error(f"❌ unified_response is not a dict!")
+                    logging.error(f"   Type: {type(unified_response)}")
+                    logging.error(f"   Value (repr): {repr(unified_response)[:500]}")
+                    yield f"data: {json.dumps({'status': 'error', 'message': f'Invalid response format from AI. Expected dict, got {type(unified_response).__name__}'})}\n\n"
                     return
                 
                 # Verify it has required keys
                 required_keys = ["JD Match", "Match Factors", "Profile Summary"]
-                missing_keys = [key for key in required_keys if key not in main_response]
+                missing_keys = [key for key in required_keys if key not in unified_response]
                 if missing_keys:
                     logging.error(f"❌ Missing required keys in response: {missing_keys}")
-                    logging.error(f"   Available keys: {list(main_response.keys())}")
+                    logging.error(f"   Available keys: {list(unified_response.keys())}")
                     yield f"data: {json.dumps({'status': 'error', 'message': f'AI response missing required fields: {missing_keys}'})}\n\n"
                     return
                 
-                # logging.info(f"✅ Main response validated - has {len(main_response)} keys")  # Reduced logging
-                
-                # Extract basic values with error handling
+                # Extract all sections from unified response
                 try:
-                    # Double-check main_response is a dict before accessing
-                    if not isinstance(main_response, dict):
-                        error_msg = f"main_response is {type(main_response)}, not dict. Value: {repr(str(main_response)[:200])}"
-                        logging.error(f"❌ {error_msg}")
-                        raise TypeError(error_msg)
-                    
-                    # Safely get JD Match
-                    if "JD Match" not in main_response:
-                        logging.error(f"❌ 'JD Match' key not found in main_response")
-                        logging.error(f"   Available keys: {list(main_response.keys())}")
-                        logging.error(f"   main_response value: {repr(main_response)[:500]}")
-                        raise KeyError("'JD Match' key not found in response")
-                    
-                match_percentage_str = main_response.get("JD Match", "0%")
+                    # Main evaluation data
+                    match_percentage_str = unified_response.get("JD Match", "0%")
                     if match_percentage_str is None:
-                        logging.warning("JD Match is None, using default")
                         match_percentage_str = "0%"
-                    
                     if not isinstance(match_percentage_str, str):
-                        logging.warning(f"JD Match is not a string: {type(match_percentage_str)}, value: {match_percentage_str}")
                         match_percentage_str = str(match_percentage_str) if match_percentage_str else "0%"
-                    
-                    # Clean and extract percentage
                     match_percentage_str = match_percentage_str.strip()
                     if not match_percentage_str:
                         match_percentage_str = "0%"
-                match_percentage = int(match_percentage_str.strip('%'))
+                    match_percentage = int(match_percentage_str.strip('%'))
                 except (ValueError, AttributeError, TypeError) as e:
                     logging.error(f"❌ Error parsing match percentage: {e}")
-                    logging.error(f"   main_response type: {type(main_response)}")
-                    logging.error(f"   main_response value: {repr(str(main_response)[:300])}")
-                    logging.error(f"   match_percentage_str: {repr(match_percentage_str) if 'match_percentage_str' in locals() else 'not defined'}")
                     match_percentage = 0
                     match_percentage_str = "0%"
                 
-                missing_keywords = main_response.get("MissingKeywords", [])
-                profile_summary = main_response.get("Profile Summary", "No summary provided.")
-                over_under_qualification = main_response.get("Over/UnderQualification Analysis", "No qualification mismatch concerns detected.")
-                match_factors = main_response.get("Match Factors", {})
-                candidate_fit_analysis = main_response.get("Candidate Fit Analysis", {})
+                # Extract all sections
+                missing_keywords = unified_response.get("MissingKeywords", [])
+                profile_summary = unified_response.get("Profile Summary", "No summary provided.")
+                over_under_qualification = unified_response.get("Over/UnderQualification Analysis", "No qualification mismatch concerns detected.")
+                match_factors = unified_response.get("Match Factors", {})
+                candidate_fit_analysis = unified_response.get("Candidate Fit Analysis", {})
+                
+                # Extract job stability (with defaults if missing)
+                stability_data = unified_response.get("Job Stability", {})
+                if not stability_data or not isinstance(stability_data, dict):
+                    stability_data = {
+                        "IsStable": True,
+                        "AverageJobTenure": "Unknown",
+                        "JobCount": 0,
+                        "StabilityScore": 50,
+                        "ReasoningExplanation": "Stability analysis not available",
+                        "RiskLevel": "Medium"
+                    }
+                
+                # Extract career progression (with defaults if missing)
+                career_data = unified_response.get("Career Progression", {})
+                if not career_data or not isinstance(career_data, dict):
+                    career_data = {
+                        "progression_score": 50,
+                        "key_observations": ["Career progression analysis not available"],
+                        "career_path": [],
+                        "red_flags": [],
+                        "reasoning": "Analysis not available"
+                    }
+                
+                # Extract interview questions (with defaults if missing)
+                questions_data = unified_response.get("Interview Questions", {})
+                if not questions_data or not isinstance(questions_data, dict):
+                    questions_data = {
+                        "TechnicalQuestions": [],
+                        "NonTechnicalQuestions": []
+                    }
+                
+                technical_questions = questions_data.get("TechnicalQuestions", [])
+                nontechnical_questions = questions_data.get("NonTechnicalQuestions", [])
+                behavioral_questions = QUICK_CHECKS
+                
+                # Derive resume filename to send to frontend (used for merged PDF download)
+                # IMPORTANT: Always prefer PDF filename for merging - if DOCX was converted, use PDF filename
+                # Use captured variables from outer scope
+                resume_filename = None
+                if captured_pdf_path and os.path.exists(captured_pdf_path):
+                    # Prefer PDF path (even if original was DOCX, we converted it)
+                    resume_filename = os.path.basename(captured_pdf_path)
+                    logging.info(f"[RESUME_FILENAME] Using PDF filename: {resume_filename}")
+                elif captured_file_path and os.path.exists(captured_file_path):
+                    resume_filename = os.path.basename(captured_file_path)
+                    logging.info(f"[RESUME_FILENAME] Using original filename: {resume_filename}")
+                
+                # Save evaluation EARLY (right after basic results) so we can send db_id immediately
+                # This allows frontend to have the evaluation ID right away
+                logging.info(f"[EARLY_SAVE] Saving evaluation early with basic results...")
+                db_id = save_evaluation(
+                    eval_id, 
+                    captured_filename, 
+                    job_title, 
+                    match_percentage, 
+                    missing_keywords, 
+                    profile_summary, 
+                    match_factors, 
+                    {},  # job_stability - will update later
+                    {},  # additional_info - will update later
+                    oorwin_job_id, 
+                    candidate_fit_analysis, 
+                    over_under_qualification, 
+                    user_email, 
+                    None,  # time_taken - will update later
+                    None,  # token_usage - will update later
+                    resume_path=captured_pdf_path  # Always use PDF path for resume_path
+                )
+                logging.info(f"[EARLY_SAVE] Early save result: db_id={db_id}")
+                
+                # Determine original file extension (based on uploaded filename)
+                # We will use this to control whether merging is allowed (PDF only for now)
+                original_ext = os.path.splitext(captured_filename or '')[1].lower().lstrip('.')
+                can_merge = (original_ext == 'pdf')
                 
                 # Send basic results immediately (user sees this in ~5-8 seconds instead of 20)
+                # NOW includes db_id so frontend can use it immediately, along with merge capability flag
                 basic_results = {
                     'status': 'basic_results',
-                    'id': eval_id,
+                    'id': eval_id,  # Keep UUID for backward compatibility
+                    'db_id': db_id,  # NEW: Send DB ID immediately (SQLite primary key)
                     'match_percentage': match_percentage,
                     'match_percentage_str': match_percentage_str,
                     'missing_keywords': missing_keywords if isinstance(missing_keywords, list) else [],
                     'profile_summary': profile_summary,
                     'over_under_qualification': over_under_qualification,
                     'match_factors': match_factors if isinstance(match_factors, dict) else {},
-                    'candidate_fit_analysis': candidate_fit_analysis if isinstance(candidate_fit_analysis, dict) else {}
+                    'candidate_fit_analysis': candidate_fit_analysis if isinstance(candidate_fit_analysis, dict) else {},
+                    'filename': resume_filename,
+                    'resume_path': resume_filename,  # Filename used for merging/downloads
+                    'original_file_ext': original_ext,  # e.g., 'pdf' or 'docx'
+                    'can_merge': can_merge            # Frontend uses this to enable/disable merge button
                 }
+                
+                # Log the payload before sending
+                logging.info(f"[STREAM PAYLOAD DEBUG] {basic_results}")
                 
                 # Test JSON serialization before yielding
                 try:
@@ -3059,20 +3773,8 @@ def evaluate_resume_stream():
                     yield f"data: {json.dumps({'status': 'error', 'message': f'Data serialization error: {str(json_err)}'})}\n\n"
                     return
                 
-                # Step 2: Run additional analyses in parallel
+                # Simulate progress updates (all data already extracted from single call)
                 yield f"data: {json.dumps({'status': 'step2', 'message': 'Analyzing job stability and career progression...'})}\n\n"
-                
-                stability_data = asyncio.run(async_analyze_stability(resume_text))
-                career_data = asyncio.run(analyze_career_progression(resume_text))
-                
-                if not career_data:
-                    career_data = {
-                        "progression_score": 50,
-                        "key_observations": ["Failed to analyze career progression"],
-                        "career_path": [],
-                        "red_flags": ["Analysis error"],
-                        "reasoning": "Failed to process career data"
-                    }
                 
                 # Send stability and career data
                 additional_data = {
@@ -3082,13 +3784,8 @@ def evaluate_resume_stream():
                 }
                 yield f"data: {json.dumps(additional_data)}\n\n"
                 
-                # Step 3: Generate interview questions
+                # Simulate progress for questions
                 yield f"data: {json.dumps({'status': 'step3', 'message': 'Generating interview questions...'})}\n\n"
-                questions_data = asyncio.run(async_generate_questions(resume_text, job_description, profile_summary))
-                
-                technical_questions = questions_data.get("TechnicalQuestions", [])
-                nontechnical_questions = questions_data.get("NonTechnicalQuestions", [])
-                behavioral_questions = QUICK_CHECKS
                 
                 # Send questions
                 questions_data_response = {
@@ -3099,23 +3796,54 @@ def evaluate_resume_stream():
                 }
                 yield f"data: {json.dumps(questions_data_response)}\n\n"
                 
-                # Step 4: Save to database
-                yield f"data: {json.dumps({'status': 'step4', 'message': 'Saving results...'})}\n\n"
+                # Step 4: Update evaluation with additional data (stability, career, questions)
+                # Note: Evaluation was already saved early after basic_results, so we just update it
+                yield f"data: {json.dumps({'status': 'step4', 'message': 'Finalizing results...'})}\n\n"
                 
                 additional_info = {
                     "job_stability": stability_data,
                     "career_progression": career_data,
-                    "reasoning": main_response.get("Reasoning", "")
+                    "reasoning": unified_response.get("Reasoning", "")
                 }
                 
                 # Calculate time taken
                 time_taken = round(time.time() - start_time, 2)  # Round to 2 decimal places
                 
-                # Debug: Log the data being saved
-                logging.info(f"Attempting to save evaluation: eval_id={eval_id}, filename={filename}, job_title={job_title}, oorwin_job_id={oorwin_job_id}, user_email={user_email}, time_taken={time_taken}s")
+                # Update the evaluation that was saved early with additional data
+                if db_id:
+                    logging.info(f"[UPDATE] Updating evaluation {db_id} with additional data...")
+                    conn_update = sqlite3.connect(DATABASE_NAME)
+                    cursor_update = conn_update.cursor()
+                    
+                    # Update job_stability, career_progression, time_taken, token_usage
+                    cursor_update.execute("""
+                        UPDATE evaluations 
+                        SET job_stability = ?,
+                            career_progression = ?,
+                            time_taken = ?,
+                            token_usage = ?
+                        WHERE id = ?
+                    """, (
+                        json.dumps(stability_data) if stability_data else '{}',
+                        json.dumps(career_data) if career_data else '{}',
+                        time_taken,
+                        total_tokens_used,
+                        db_id
+                    ))
+                    conn_update.commit()
+                    conn_update.close()
+                    logging.info(f"[UPDATE] ✅ Updated evaluation {db_id} with additional data")
+                else:
+                    logging.warning(f"[UPDATE] ⚠️ No db_id available to update evaluation")
                 
-                db_id = save_evaluation(eval_id, filename, job_title, match_percentage, missing_keywords, profile_summary, match_factors, stability_data, additional_info, oorwin_job_id, candidate_fit_analysis, over_under_qualification, user_email, time_taken)
-                logging.info(f"Save evaluation result: db_id={db_id}, oorwin_job_id={oorwin_job_id}")
+                # Verify DB save
+                if db_id:
+                    conn_verify = sqlite3.connect(DATABASE_NAME)
+                    cursor_verify = conn_verify.cursor()
+                    cursor_verify.execute("SELECT resume_path FROM evaluations WHERE id = ?", (db_id,))
+                    saved_resume_path = cursor_verify.fetchone()
+                    conn_verify.close()
+                    logging.info(f"[VERIFY] Saved resume_path in DB for id {db_id}: {saved_resume_path}")
                 
                 if db_id:
                     # Use the database ID (integer) for saving interview questions
@@ -3395,22 +4123,59 @@ def dataframe_to_clean_markdown(df: pd.DataFrame) -> str:
         if table_df.shape[1] > 0:
             non_empty_cols = []
             for c in table_df.columns:
-                col_str = table_df[c].astype(str).str.strip()
-                if (col_str != "").any():
-                    non_empty_cols.append(c)
+                try:
+                    # Safely convert column to string, handling DataFrames and complex objects
+                    col_series = table_df[c]
+                    # Check if column contains DataFrames or other complex objects
+                    if col_series.dtype == 'object':
+                        # Convert each cell to string individually to handle complex objects
+                        col_str = col_series.apply(lambda x: str(x) if x is not None else '').str.strip()
+                    else:
+                        col_str = col_series.astype(str).str.strip()
+                    if (col_str != "").any():
+                        non_empty_cols.append(c)
+                except (AttributeError, TypeError) as e:
+                    # If .str accessor fails, try converting each cell individually
+                    try:
+                        col_str = col_series.apply(lambda x: str(x).strip() if x is not None and str(x).strip() else '')
+                        if (col_str != "").any():
+                            non_empty_cols.append(c)
+                    except Exception:
+                        # Skip this column if we can't process it
+                        logging.warning(f"Skipping column '{c}' due to processing error")
+                        continue
             if non_empty_cols:
                 table_df = table_df[non_empty_cols]
 
         # Normalize cell content: string type, collapse newlines/tabs, trim
         for c in table_df.columns:
-            table_df[c] = (
-                table_df[c]
-                .astype(str)
-                .str.replace("\r\n|\r|\n", " ", regex=True)
-                .str.replace("\t", " ", regex=True)
-                .str.replace("\\s+", " ", regex=True)
-                .str.strip()
-            )
+            try:
+                # Safely convert column to string, handling DataFrames and complex objects
+                col_series = table_df[c]
+                if col_series.dtype == 'object':
+                    # For object columns, convert each cell individually to handle complex objects
+                    table_df[c] = col_series.apply(
+                        lambda x: ' '.join(str(x).split()) if x is not None else ''
+                    )
+                else:
+                    # For non-object columns, use standard string operations
+                    table_df[c] = (
+                        col_series
+                        .astype(str)
+                        .str.replace("\r\n|\r|\n", " ", regex=True)
+                        .str.replace("\t", " ", regex=True)
+                        .str.replace("\\s+", " ", regex=True)
+                        .str.strip()
+                    )
+            except (AttributeError, TypeError) as e:
+                # If .str accessor fails, convert each cell individually
+                try:
+                    table_df[c] = table_df[c].apply(
+                        lambda x: ' '.join(str(x).split()) if x is not None else ''
+                    )
+                except Exception as inner_e:
+                    # Last resort: just convert to string
+                    table_df[c] = table_df[c].apply(lambda x: str(x) if x is not None else '')
 
         # Render as markdown without index
         return table_df.to_markdown(index=False, tablefmt="pipe")
@@ -4018,6 +4783,16 @@ def update_db_schema():
     except sqlite3.OperationalError:
         pass  # Column already exists
     
+    # Add token_usage column to evaluations table
+    try:
+        cursor.execute('''
+            ALTER TABLE evaluations 
+            ADD COLUMN token_usage INTEGER;
+        ''')
+        logging.info("Added token_usage column to evaluations table")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    
     # Create recruiter_handbooks table
     try:
         cursor.execute('''
@@ -4560,7 +5335,7 @@ Generate the complete Recruiter Playbook & Handbook now:"""
                 else:
                     raise Exception(f"AI response text is empty. response.text={repr(response.text)}")
             else:
-        handbook_content = response.text
+                handbook_content = response.text
             
             logging.info(f"Handbook content length: {len(handbook_content)} characters")
         except Exception as api_error:
@@ -5059,6 +5834,20 @@ def get_analytics_overview():
         avg_handbook_time_result = cursor.fetchone()[0]
         avg_handbook_time = round(avg_handbook_time_result, 1) if avg_handbook_time_result else 0
         
+        # Get token usage metrics
+        token_where = eval_where_clause + (" AND " if eval_where_clause else " WHERE ") + "token_usage IS NOT NULL AND token_usage > 0"
+        cursor.execute(f'SELECT SUM(token_usage), AVG(token_usage), COUNT(*) FROM evaluations{token_where}', eval_params)
+        token_result = cursor.fetchone()
+        total_tokens_used = int(token_result[0]) if token_result[0] else 0
+        avg_tokens_per_eval = round(token_result[1], 0) if token_result[1] else 0
+        evals_with_tokens = token_result[2] if token_result[2] else 0
+        
+        # Get latest evaluation token usage
+        latest_token_where = eval_where_clause + (" AND " if eval_where_clause else " WHERE ") + "token_usage IS NOT NULL AND token_usage > 0"
+        cursor.execute(f'SELECT token_usage FROM evaluations{latest_token_where} ORDER BY timestamp DESC LIMIT 1', eval_params)
+        latest_token_result = cursor.fetchone()
+        latest_eval_tokens = int(latest_token_result[0]) if latest_token_result else None
+        
         conn.close()
         
         # Calculate trends
@@ -5086,6 +5875,9 @@ def get_analytics_overview():
                 'avg_evals_per_job': round(avg_evals_per_job, 1),
                 'avg_eval_time': avg_eval_time,
                 'avg_handbook_time': avg_handbook_time,
+                'total_tokens_used': total_tokens_used,
+                'tokens_per_eval': int(avg_tokens_per_eval),
+                'latest_eval_tokens': latest_eval_tokens,
                 'trends': {
                     'evaluations': {
                         'change': eval_change,
@@ -6483,6 +7275,265 @@ def download_evaluation_pdf():
             'message': f'Failed to generate PDF: {str(e)}'
         }), 500
 
+
+@app.route('/api/download-resume/<int:eval_id>', methods=['GET'])
+@login_required
+def download_resume(eval_id):
+    """Download the original resume file associated with a given evaluation."""
+    try:
+        conn = sqlite3.connect(DATABASE_NAME)
+        cursor = conn.cursor()
+        cursor.execute(
+            '''
+            SELECT filename, resume_path
+            FROM evaluations
+            WHERE id = ?
+            ''',
+            (eval_id,),
+        )
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            return jsonify({'success': False, 'message': 'Evaluation not found'}), 404
+
+        filename, resume_path_from_db = row[0], row[1]
+
+        # We now store only filename in resume_path. Normalize to filename and rebuild full path.
+        resume_filename = None
+        if resume_path_from_db:
+            resume_filename = os.path.basename(str(resume_path_from_db).strip().strip('"').strip("'"))
+
+        if not resume_filename:
+            # Backward compatibility: fall back to filename column
+            if not filename:
+                return jsonify(
+                    {
+                        'success': False,
+                        'message': 'Resume file path not available for this evaluation',
+                    }
+                ), 404
+            resume_filename = os.path.basename(filename)
+
+        resume_path = os.path.join(app.config['UPLOAD_FOLDER'], resume_filename)
+        resume_path = os.path.normpath(resume_path)
+
+        if not os.path.exists(resume_path):
+            logging.error(f"Resume file not found for evaluation {eval_id}: {resume_path}")
+            return jsonify(
+                {
+                    'success': False,
+                    'message': f'Resume file not found on server: {os.path.basename(resume_path)}',
+                }
+            ), 404
+
+        download_name = os.path.basename(resume_path) if resume_path else (filename or 'resume')
+        return send_file(resume_path, as_attachment=True, download_name=download_name)
+
+    except Exception as e:
+        logging.error(f"Error downloading resume for evaluation {eval_id}: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': f'Failed to download resume: {str(e)}'}), 500
+
+@app.route('/api/download-evaluation-with-resume', methods=['POST'])
+@login_required
+def download_evaluation_with_resume():
+    """API endpoint to download resume evaluation merged with original resume PDF"""
+    try:
+        if not PDF_MERGE_AVAILABLE:
+            return jsonify({
+                'success': False,
+                'message': 'PDF merging not available. Please install PyPDF2.'
+            }), 500
+        
+        data = request.get_json()
+        logging.info(f"[MERGE DEBUG] Incoming JSON: {data}")
+        evaluation_data = data.get('evaluation_data', {}) or {}
+        evaluation_id = data.get('evaluation_id')
+        resume_path_from_request = data.get('resume_path')
+
+        if not evaluation_id:
+            return jsonify({
+                'success': False,
+                'message': 'No evaluation_id provided for merged download.'
+            }), 400
+
+        # Validate that evaluation_id is NOT a UUID (UUIDs contain hyphens)
+        # The database uses integer IDs, not UUIDs
+        if isinstance(evaluation_id, str) and '-' in str(evaluation_id):
+            logging.error(f"[MERGE_DOWNLOAD_ERROR] Received UUID instead of DB ID: {evaluation_id}")
+            return jsonify({
+                'success': False,
+                'message': f'Invalid evaluation ID format. Received UUID "{evaluation_id}" but database uses integer IDs. '
+                          f'Please wait for evaluation to complete and try again, or refresh the page.'
+            }), 400
+
+        # Convert to integer if it's a numeric string
+        try:
+            evaluation_id = int(evaluation_id)
+        except (ValueError, TypeError):
+            logging.error(f"[MERGE_DOWNLOAD_ERROR] Invalid evaluation_id type: {type(evaluation_id)}, value: {evaluation_id}")
+            return jsonify({
+                'success': False,
+                'message': f'Invalid evaluation ID format. Expected integer, got: {type(evaluation_id).__name__}'
+            }), 400
+
+        # Look up resume location from the database based on evaluation_id
+        conn = sqlite3.connect(DATABASE_NAME)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT filename, resume_path FROM evaluations WHERE id = ?",
+            (evaluation_id,)
+        )
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            logging.error(f"[MERGE_DOWNLOAD_ERROR] Evaluation {evaluation_id} not found in database.")
+            return jsonify({
+                'success': False,
+                'message': f'Evaluation {evaluation_id} not found in database.'
+            }), 404
+
+        filename_from_db, resume_path_from_db = row
+
+        # Normalize stored value to a filename (basename)
+        # Prefer resume_path from request if provided (frontend sends it), otherwise use DB value
+        resume_filename = None
+        if resume_path_from_request:
+            # Frontend sent resume_path, use it (but validate it exists)
+            resume_filename = os.path.basename(str(resume_path_from_request).strip().strip('"').strip("'"))
+            logging.info(f"[MERGE DEBUG] Using resume_path from request: {resume_filename}")
+        elif resume_path_from_db:
+            resume_filename = os.path.basename(str(resume_path_from_db).strip().strip('"').strip("'"))
+            logging.info(f"[MERGE DEBUG] Using resume_path from DB: {resume_filename}")
+        elif filename_from_db:
+            resume_filename = os.path.basename(str(filename_from_db).strip().strip('"').strip("'"))
+            logging.info(f"[MERGE DEBUG] Using filename from DB: {resume_filename}")
+
+        if not resume_filename:
+            logging.error(
+                f"[MERGE_DOWNLOAD_ERROR] No resume filename for evaluation {evaluation_id}. "
+                f"DB resume_path={resume_path_from_db}, filename={filename_from_db}"
+            )
+            return jsonify({
+                'success': False,
+                'message': 'No resume file reference is stored for this evaluation in the database.'
+            }), 404
+
+        # Construct full path to resume file in uploads folder
+        # app.config['UPLOAD_FOLDER'] is set to: os.path.join(app.root_path, "uploads")
+        uploads_folder = app.config.get('UPLOAD_FOLDER', os.path.join(app.root_path, "uploads"))
+        full_resume_path = os.path.join(uploads_folder, resume_filename)
+        full_resume_path = os.path.normpath(full_resume_path)
+        
+        # Log the path resolution for debugging
+        logging.info(f"[MERGE DEBUG] Uploads folder: {uploads_folder}")
+        logging.info(f"[MERGE DEBUG] Resume filename: {resume_filename}")
+        logging.info(f"[MERGE DEBUG] Full resume path: {full_resume_path}")
+        logging.info(f"[MERGE DEBUG] Path exists: {os.path.exists(full_resume_path)}")
+
+        # Check if resume file exists
+        if not os.path.exists(full_resume_path):
+            logging.error(
+                "[MERGE_DOWNLOAD_ERROR] Resume file not found on disk. "
+                f"Expected at: {full_resume_path}"
+            )
+            logging.error(f"[MERGE_DOWNLOAD_ERROR] Uploads folder contents: {os.listdir(uploads_folder) if os.path.exists(uploads_folder) else 'Folder does not exist'}")
+            return jsonify({
+                'success': False,
+                'message': f'Resume file not found on server at expected location. '
+                           f'Expected file name: \"{resume_filename}\" inside the uploads folder at: {uploads_folder}'
+            }), 404
+        
+        # Check if resume is a PDF (only PDFs can be merged)
+        if not resume_filename.lower().endswith('.pdf'):
+            logging.error(
+                "[MERGE_DOWNLOAD_ERROR] Resume is not a PDF. "
+                f"Got extension for file \"{resume_filename}\""
+            )
+            return jsonify({
+                'success': False,
+                'message': 'Only PDF resumes can be merged. The stored resume is not a PDF. '
+                           'Please upload a PDF resume and run a new evaluation.'
+            }), 400
+        
+        logging.info(f"Generating merged PDF: evaluation + resume from {full_resume_path}")
+        
+        # Generate evaluation PDF by making an internal call to the existing endpoint logic
+        # We'll create a minimal request context to reuse the download_evaluation_pdf logic
+        # Actually simpler: just generate the PDF using the same code pattern
+        
+        # Create evaluation PDF in memory (simplified version - can be enhanced later)
+        eval_buffer = BytesIO()
+        eval_doc = SimpleDocTemplate(eval_buffer, pagesize=A4, rightMargin=50, leftMargin=50, topMargin=72, bottomMargin=18)
+        
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle('CustomTitle', parent=styles['Heading1'], fontSize=24, textColor='#2c3e50', spaceAfter=30, alignment=TA_CENTER)
+        heading1_style = ParagraphStyle('CustomHeading1', parent=styles['Heading1'], fontSize=18, textColor='#2c3e50', spaceAfter=12, spaceBefore=12)
+        heading2_style = ParagraphStyle('CustomHeading2', parent=styles['Heading2'], fontSize=14, textColor='#34495e', spaceAfter=10, spaceBefore=10)
+        body_style = ParagraphStyle('CustomBody', parent=styles['BodyText'], fontSize=11, alignment=TA_LEFT, spaceAfter=12)
+        
+        eval_elements = [Paragraph("Resume Evaluation Report", title_style), Spacer(1, 0.2*inch)]
+        eval_elements.append(Paragraph(f"<b>Job Title:</b> {evaluation_data.get('job_title', 'N/A')}", body_style))
+        eval_elements.append(Paragraph(f"<b>Candidate Resume:</b> {evaluation_data.get('filename', 'Unknown')}", body_style))
+        if evaluation_data.get('oorwin_job_id'):
+            eval_elements.append(Paragraph(f"<b>Job ID:</b> {evaluation_data.get('oorwin_job_id')}", body_style))
+        eval_elements.append(Spacer(1, 0.3*inch))
+        
+        match_pct = evaluation_data.get('match_percentage', 0)
+        match_pct_str = evaluation_data.get('match_percentage_str', f"{match_pct}%")
+        eval_elements.append(Paragraph(f"<b>Match Score: {match_pct_str}</b>", heading1_style))
+        eval_elements.append(Spacer(1, 0.2*inch))
+        
+        # Add other sections if available (simplified - can add more later)
+        if evaluation_data.get('profile_summary'):
+            eval_elements.append(Paragraph("<b>Profile Summary:</b>", heading2_style))
+            eval_elements.append(Paragraph(evaluation_data.get('profile_summary', ''), body_style))
+        
+        eval_doc.build(eval_elements)
+        evaluation_pdf_bytes = eval_buffer.getvalue()
+        eval_buffer.close()
+        
+        # Merge evaluation PDF with resume PDF
+        merger = PdfMerger()
+        
+        # Add evaluation PDF
+        evaluation_pdf_io = BytesIO(evaluation_pdf_bytes)
+        merger.append(evaluation_pdf_io)
+        
+        # Add original resume PDF
+        with open(full_resume_path, 'rb') as resume_file:
+            merger.append(resume_file)
+        
+        # Create merged PDF in memory
+        merged_pdf_buffer = BytesIO()
+        merger.write(merged_pdf_buffer)
+        merger.close()
+        evaluation_pdf_io.close()
+        
+        # Get merged PDF data
+        merged_pdf_data = merged_pdf_buffer.getvalue()
+        merged_pdf_buffer.close()
+        
+        logging.info("Merged PDF generated successfully")
+        
+        # Return merged PDF as response
+        filename = evaluation_data.get('filename', 'Resume_With_Evaluation')
+        filename_base = os.path.splitext(filename)[0] if filename else 'Resume_With_Evaluation'
+        
+        response = make_response(merged_pdf_data)
+        response.headers['Content-Type'] = 'application/pdf'
+        response.headers['Content-Disposition'] = f'attachment; filename=Resume_With_Evaluation_{filename_base}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf'
+        
+        return response
+        
+    except Exception as e:
+        logging.error(f"Error generating merged PDF: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': f'Failed to generate merged PDF: {str(e)}'
+        }), 500
+
 @app.route('/api/evaluation-full/<int:eval_id>', methods=['GET'])
 def get_evaluation_full(eval_id):
     """API endpoint to get full evaluation data for viewing"""
@@ -6496,7 +7547,7 @@ def get_evaluation_full(eval_id):
                 e.id, e.filename, e.job_title, e.job_description,
                 e.match_percentage, e.match_factors, e.profile_summary,
                 e.missing_keywords, e.job_stability, e.career_progression,
-                e.oorwin_job_id, e.timestamp, e.candidate_fit_analysis, e.over_under_qualification
+                e.oorwin_job_id, e.timestamp, e.candidate_fit_analysis, e.over_under_qualification, e.resume_path
             FROM evaluations e
             WHERE e.id = ?
         ''', (eval_id,))
@@ -6522,6 +7573,47 @@ def get_evaluation_full(eval_id):
         
         # Parse JSON fields
         import json
+        resume_path_from_db = row[14] if len(row) > 14 else None
+
+        # Temporary debug logging to inspect stored paths and existence
+        logging.info(f"[DEBUG] Raw DB resume_path value: {resume_path_from_db}")
+
+        resolved_resume_path = None
+
+        # Normalize stored value to a filename (basename) when present
+        if resume_path_from_db:
+            filename_only = os.path.basename(str(resume_path_from_db).strip().strip('"').strip("'"))
+        else:
+            filename_only = None
+
+        # If no resume_path stored, fall back to filename column
+        if not filename_only:
+            filename_col = row[1] if row[1] else ''
+            filename_only = os.path.basename(filename_col) if filename_col else None
+
+        if filename_only:
+            # Reconstruct full absolute path from UPLOAD_FOLDER and filename
+            candidate_path = os.path.join(app.config['UPLOAD_FOLDER'], filename_only)
+            candidate_path = os.path.normpath(candidate_path)
+
+            # Handle relative paths: if not absolute, make it relative to app root
+            if not os.path.isabs(candidate_path):
+                candidate_path = os.path.join(app.root_path, candidate_path)
+                candidate_path = os.path.normpath(candidate_path)
+
+            logging.info(f"[DEBUG] Reconstructed resume path candidate: {candidate_path}")
+            logging.info(f"[DEBUG] Absolute resolved path: {os.path.abspath(candidate_path)}")
+            logging.info(f"[DEBUG] Exists check: {os.path.exists(os.path.abspath(candidate_path))}")
+
+            if os.path.exists(candidate_path):
+                resolved_resume_path = candidate_path
+                logging.info(f"[DEBUG] Resolved path: {resolved_resume_path}")
+                logging.info(f"[DEBUG] Exists check: {os.path.exists(resolved_resume_path)}")
+            else:
+                logging.warning(f"Resume file not found at reconstructed path: {candidate_path}")
+
+        # If we still don't have a valid path, keep it as None so frontend can handle gracefully
+        
         evaluation = {
             'id': row[0],
             'filename': row[1],
@@ -6538,7 +7630,9 @@ def get_evaluation_full(eval_id):
             'timestamp': row[11],
             # Parse new fields from database (or use empty if not present)
             'candidate_fit_analysis': json.loads(row[12]) if (len(row) > 12 and row[12]) else {},
-            'over_under_qualification': row[13] if (len(row) > 13 and row[13]) else ''
+            'over_under_qualification': row[13] if (len(row) > 13 and row[13]) else '',
+            # Expose resolved absolute path only if file exists; otherwise None
+            'resume_path': resolved_resume_path
         }
         
         # Helper function to normalize questions (convert objects to strings)

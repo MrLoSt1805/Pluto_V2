@@ -47,12 +47,9 @@
                         <thead class="table-dark">
                             <tr>
                                 <th style="width: 12%">Job ID</th>
-                                <th style="width: 22%">Job Title</th>
-                                <th style="width: 30%">Evaluated Resumes</th>
-                                <th style="width: 15%">Res Evaluated By</th>
-                                <th style="width: 10%">First Created</th>
-                                <th style="width: 10%">Last Activity</th>
-                                <th style="width: 10%">Actions</th>
+                                <th style="width: 25%">Job Title</th>
+                                <th style="width: 40%">Evaluated Resumes</th>
+                                <th style="width: 23%">Actions</th>
                 </tr>
                         </thead>
                         <tbody id="job-history-table-body">
@@ -229,18 +226,13 @@ function renderJobTable(jobs) {
             resumeListHTML = '<span class="text-muted">No evaluations yet</span>';
         }
         
-        // Format Res Evaluated By
-        let resEvaluatedHTML = '';
-        if (job.res_evaluated_by && job.res_evaluated_by.length > 0) {
-            resEvaluatedHTML = job.res_evaluated_by.map(user => {
-                return `<span class="badge bg-success" title="${escapeHtml(user.email)}">${escapeHtml(user.name)}</span>`;
-            }).join(' ');
-        } else {
-            resEvaluatedHTML = '<span class="text-muted">-</span>';
-        }
+        const firstCreated = formatDate(job.first_created);
+        const lastActivity = formatDate(job.last_activity);
         
         return `
-            <tr data-job-id="${escapeHtml(job.job_id)}" data-job-title="${escapeHtml(job.job_title)}" data-job-index="${index}">
+            <tr data-job-id="${escapeHtml(job.job_id)}" data-job-title="${escapeHtml(job.job_title)}" data-job-index="${index}" 
+                title="First Created: ${firstCreated} | Last Activity: ${lastActivity}" 
+                style="cursor: help;">
                 <td><strong>${escapeHtml(job.job_id)}</strong></td>
                 <td>
                     ${job.handbooks_count > 0 
@@ -255,13 +247,6 @@ function renderJobTable(jobs) {
                     </div>
                     <small class="text-muted">${job.evaluations_count} total</small>
                 </td>
-                <td>
-                    <div class="d-flex flex-wrap gap-1">
-                        ${resEvaluatedHTML}
-                    </div>
-                </td>
-                <td><small>${formatDate(job.first_created)}</small></td>
-                <td><small>${formatDate(job.last_activity)}</small></td>
                 <td>
                     <a href="/resume-evaluator?job_id=${encodeURIComponent(job.job_id)}" 
                        class="btn btn-sm btn-success" title="Evaluate resume for this job">

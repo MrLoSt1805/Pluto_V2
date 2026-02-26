@@ -4,7 +4,7 @@
 
 {% block content %}
 <div class="container h-100 d-flex flex-column justify-content-center">
-    <div class="row g-4">
+    <div class="row g-4" style="margin-top: 5vh;">
         <div class="col-md-4 d-flex flex-column">
             <a href="{{ url_for('hr_assistant') }}" class="text-decoration-none mb-3">
                 <div class="tile hr-assistant">
@@ -21,7 +21,7 @@
                 <div class="tile resume-evaluator">
                     <div class="tile-content">
                         <div class="tile-icon">📄</div>
-                        <div class="tile-title">Recruiter Co-Pilot</div>
+                        <div class="tile-title">Pluto</div>
                         <div class="tile-description">
                             Evaluate resumes against job descriptions with AI-powered analysis
                         </div>
@@ -47,6 +47,12 @@
 
 {% block scripts %}
 <style>
+    /* Adjust container for better vertical centering */
+    .container.h-100 {
+        padding-top: 4vh;
+        padding-bottom: 4vh;
+    }
+    
     .tile {
         height: 250px;
         display: flex;

@@ -3,67 +3,92 @@
 {% block title %}Info Buddy - HR Assistant{% endblock %}
 
 {% block content %}
-<div class="container">
-    <div class="row justify-content-center">
-        <div class="col-lg-8">
-            <div class="card shadow-sm">
-                <div class="card-body p-4">
-                    <div class="text-center mb-4">
-                        <img src="{{ url_for('static', filename='plbot.png') }}" alt="PeopleBot Logo" class="mb-3" style="width: 120px; height: auto;">
-                        <h1 class="h2 mb-2">Info Buddy 🤖</h1>
-                        <p class="text-muted">Your go-to for instant answers on HR policies & any other Information!</p>
-                    </div>
+<div class="info-buddy-wrapper" id="info-buddy-wrapper">
+    <!-- Left Half: Question Input and Controls -->
+    <div class="left-panel" id="left-panel">
+        <div class="card shadow-sm h-100">
+            <div class="card-body p-4">
+                <div class="text-center mb-4">
+                    <img src="{{ url_for('static', filename='plbot.png') }}" alt="PeopleBot Logo" class="mb-3 bot-logo" style="width: 120px; height: auto;">
+                    <h1 class="h2 mb-2">Info Buddy 🤖</h1>
+                    <p class="text-muted">Your go-to for instant answers on HR policies & any other Information!</p>
+                </div>
 
-                    <!-- Input Section -->
-                    <div class="mb-4">
-                        <label for="question" class="form-label">Ask a Question:</label>
-                        <textarea id="question" rows="4" class="form-control"
-                            placeholder="Ask about HR policies, benefits, or events. Enable 'Go Online' for general queries"></textarea>
-                    </div>
-                    
-                    <!-- Mode Toggle -->
-                    <div class="mb-4">
-                        <div class="form-check form-switch">
-                            <input class="form-check-input" type="checkbox" id="online-mode">
-                            <label class="form-check-label" for="online-mode">Go Online</label>
+                <!-- Question Display (shown after question is asked) -->
+                <div id="question-display" class="mb-4 d-none">
+                    <div class="d-flex align-items-center gap-2 mb-3">
+                        <div class="bot-animation d-none" id="bot-animation">
+                            <div class="bot-dot"></div>
+                            <div class="bot-dot"></div>
+                            <div class="bot-dot"></div>
                         </div>
-                    </div>
-
-                    <!-- Submit Button -->
-                    <button onclick="askQuestion()" id="ask-btn" class="btn btn-primary w-100 mb-4">
-                        Ask Question
-                    </button>
-
-                    <!-- Response Section -->
-                    <div id="response" class="mt-4 d-none">
-                        <div class="d-flex justify-content-between align-items-center mb-3">
-                            <h3 class="h5 mb-0">Response:</h3>
-                            <button onclick="copyResponse()" class="btn btn-link p-0" title="Copy response">
-                                <i class="bi bi-clipboard"></i>
-                            </button>
-                        </div>
-                        <div id="response-content" class="border rounded p-4 bg-white" style="max-height: 70vh; overflow-y: auto;"></div>
-                    </div>
-
-                    <!-- Feedback Section -->
-                    <div id="feedback-section" class="mt-4 d-none">
-                        <h4 class="h6 mb-3">Was this response helpful?</h4>
-                        <div class="d-flex align-items-center gap-3">
-                            <div class="star-rating">
-                                <span class="star" data-rating="1">★</span>
-                                <span class="star" data-rating="2">★</span>
-                                <span class="star" data-rating="3">★</span>
-                                <span class="star" data-rating="4">★</span>
-                                <span class="star" data-rating="5">★</span>
-                            </div>
-                            <textarea id="feedback-text" class="form-control" rows="2" 
-                                placeholder="Additional comments (optional)"></textarea>
-                            <button onclick="submitFeedback()" class="btn btn-success">
-                                Submit
-                            </button>
+                        <div class="question-bubble p-3 bg-light rounded" id="question-bubble" style="cursor: pointer;" onclick="resetToNewQuestion()">
+                            <p class="mb-0" id="question-text"></p>
                         </div>
                     </div>
                 </div>
+
+                <!-- Input Section -->
+                <div class="mb-4" id="input-section">
+                    <label for="question" class="form-label">Ask a Question:</label>
+                    <textarea id="question" rows="4" class="form-control"
+                        placeholder="Ask about HR policies, benefits, or events. Enable 'Go Online' for general queries"></textarea>
+                </div>
+                
+                <!-- Mode Toggles -->
+                <div class="mb-4">
+                    <div class="form-check form-switch mb-2">
+                        <input class="form-check-input" type="checkbox" id="online-mode">
+                        <label class="form-check-label" for="online-mode">Go Online</label>
+                    </div>
+                    <div class="form-check form-switch">
+                        <!-- Long answer toggle: OFF = short answer (default), ON = long answer -->
+                        <input class="form-check-input" type="checkbox" id="long-answer">
+                        <label class="form-check-label" for="long-answer">Long answer</label>
+                    </div>
+                </div>
+
+                <!-- Submit Button -->
+                <button onclick="askQuestion()" id="ask-btn" class="btn btn-primary w-100 mb-4">
+                    Ask Question
+                </button>
+
+                <!-- Feedback Section -->
+                <div id="feedback-section" class="mt-4 d-none">
+                    <h4 class="h6 mb-3">Was this response helpful?</h4>
+                    <div class="d-flex align-items-center gap-3 flex-wrap">
+                        <div class="star-rating">
+                            <span class="star" data-rating="1">★</span>
+                            <span class="star" data-rating="2">★</span>
+                            <span class="star" data-rating="3">★</span>
+                            <span class="star" data-rating="4">★</span>
+                            <span class="star" data-rating="5">★</span>
+                        </div>
+                        <textarea id="feedback-text" class="form-control" rows="2" 
+                            placeholder="Additional comments (optional)"></textarea>
+                        <button onclick="submitFeedback()" class="btn btn-success">
+                            Submit
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Divider Line -->
+    <div class="divider-line" id="divider-line"></div>
+
+    <!-- Right Half: Answer Display (hidden by default) -->
+    <div class="right-panel" id="right-panel" style="display: none;">
+        <div class="card shadow-sm h-100">
+            <div class="card-body p-4 d-flex flex-column">
+                <div class="d-flex justify-content-between align-items-center mb-3 flex-shrink-0">
+                    <h3 class="h5 mb-0">Response:</h3>
+                    <button onclick="copyResponse()" class="btn btn-link p-0" title="Copy response">
+                        <i class="bi bi-clipboard"></i>
+                    </button>
+                </div>
+                <div id="response-content" class="response-content border rounded p-4 bg-white flex-grow-1"></div>
             </div>
         </div>
     </div>
@@ -72,6 +97,19 @@
 
 {% block scripts %}
 <script>
+    // Remove any inline styles from response-content on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        const responseContent = document.getElementById('response-content');
+        if (responseContent) {
+            // Remove any inline max-height or overflow styles that might interfere
+            responseContent.style.removeProperty('max-height');
+            responseContent.style.removeProperty('height');
+            // Ensure our CSS rules take precedence
+            responseContent.style.setProperty('overflow-y', 'auto', 'important');
+            responseContent.style.setProperty('overflow-x', 'hidden', 'important');
+        }
+    });
+    
     // Enable GFM tables and better markdown parsing
     if (window.marked) {
         marked.setOptions({
@@ -93,25 +131,82 @@
     async function askQuestion() {
         const question = document.getElementById("question").value.trim();
         const onlineMode = document.getElementById("online-mode").checked;
+        // Toggle semantics:
+        // - long-answer OFF  => short answer (default)
+        // - long-answer ON   => detailed/long answer
+        const longAnswer = document.getElementById("long-answer").checked;
         
         if (question.length < 2) {
             alert("Please provide a more detailed question.");
             return;
         }
 
-        const responseDiv = document.getElementById("response");
+        const wrapper = document.getElementById("info-buddy-wrapper");
+        const leftPanel = document.getElementById("left-panel");
+        const rightPanel = document.getElementById("right-panel");
+        const questionDisplay = document.getElementById("question-display");
+        const questionText = document.getElementById("question-text");
         const responseContent = document.getElementById("response-content");
         const feedbackSection = document.getElementById("feedback-section");
         const askButton = document.getElementById("ask-btn");
+        const inputSection = document.getElementById("input-section");
+        const botAnimation = document.getElementById("bot-animation");
 
-        // Show loading state
-        responseDiv.classList.remove("d-none");
+        // Hide input section with smooth transition and show question display
+        inputSection.style.transition = "opacity 0.3s ease, transform 0.3s ease";
+        inputSection.style.opacity = "0";
+        inputSection.style.transform = "translateY(-10px)";
         
-        // Add smooth scroll to response
         setTimeout(() => {
-            responseDiv.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }, 100);
+            inputSection.style.display = "none";
+            inputSection.style.opacity = "";
+            inputSection.style.transform = "";
+        }, 300);
         
+        questionText.textContent = question;
+        questionDisplay.style.opacity = "0";
+        questionDisplay.style.transform = "translateY(10px)";
+        questionDisplay.style.transition = "opacity 0.3s ease, transform 0.3s ease";
+        questionDisplay.classList.remove("d-none");
+        
+        setTimeout(() => {
+            questionDisplay.style.opacity = "1";
+            questionDisplay.style.transform = "translateY(0)";
+        }, 50);
+        
+        // Show bot animation dots while generating
+        botAnimation.classList.remove("d-none");
+
+        // Calculate starting position for smooth slide animation
+        const rect = leftPanel.getBoundingClientRect();
+        const wrapperRect = wrapper.getBoundingClientRect();
+        const currentLeft = rect.left - wrapperRect.left;
+        
+        // Set initial position
+        leftPanel.style.position = "relative";
+        leftPanel.style.transform = `translateX(${currentLeft}px)`;
+        leftPanel.style.width = rect.width + 'px';
+        
+        // Force reflow
+        void leftPanel.offsetWidth;
+        
+        // Activate split view
+        wrapper.classList.add("split-view");
+        
+        // Animate to final position (left side, 50% width)
+        requestAnimationFrame(() => {
+            leftPanel.style.transition = "transform 0.6s cubic-bezier(0.4, 0, 0.2, 1), width 0.6s cubic-bezier(0.4, 0, 0.2, 1)";
+            leftPanel.style.transform = "translateX(0)";
+            leftPanel.style.width = "50%";
+        });
+        
+        // Show right panel immediately with full width (50%), fade in smoothly
+        rightPanel.style.display = "flex";
+        rightPanel.style.width = "50%";
+        rightPanel.style.opacity = "0";
+        rightPanel.style.transform = "translateX(20px)";
+        
+        // Clear previous response and show loading
         responseContent.innerHTML = `
             <div class="d-flex align-items-center gap-2">
                 <div class="spinner-border spinner-border-sm" role="status">
@@ -120,8 +215,16 @@
                 <span>Thinking...</span>
             </div>
         `;
+        
         askButton.disabled = true;
         feedbackSection.classList.add("d-none");
+
+        // Trigger fade-in animation for right panel after a short delay
+        setTimeout(() => {
+            rightPanel.style.transition = "opacity 0.6s cubic-bezier(0.4, 0, 0.2, 1), transform 0.6s cubic-bezier(0.4, 0, 0.2, 1)";
+            rightPanel.style.opacity = "1";
+            rightPanel.style.transform = "translateX(0)";
+        }, 300);
 
         try {
             const response = await fetch('/api/ask', {
@@ -129,7 +232,8 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     question: question,
-                    online_mode: onlineMode
+                    online_mode: onlineMode,
+                    long_answer: longAnswer
                 })
             });
 
@@ -167,12 +271,17 @@
                     }
                 });
 
-                // Scroll to the bottom of the response content
-                responseContent.scrollTop = responseContent.scrollHeight;
             }
 
+            // Hide bot animation dots when answer is complete
+            botAnimation.classList.add("d-none");
+            
+            // Show feedback in left panel
             feedbackSection.classList.remove("d-none");
         } catch (error) {
+            // Hide bot animation dots on error
+            botAnimation.classList.add("d-none");
+            
             responseContent.innerHTML = `
                 <div class="alert alert-danger mb-0">
                     An error occurred: ${error.message}
@@ -192,6 +301,55 @@
             copyBtn.setAttribute('title', 'Copied!');
             setTimeout(() => copyBtn.setAttribute('title', originalTitle), 2000);
         });
+    }
+    
+    function resetToNewQuestion() {
+        // Keep split view active, just show input box for new question
+        const questionDisplay = document.getElementById("question-display");
+        const inputSection = document.getElementById("input-section");
+        const questionInput = document.getElementById("question");
+        const feedbackSection = document.getElementById("feedback-section");
+        const botAnimation = document.getElementById("bot-animation");
+        const askButton = document.getElementById("ask-btn");
+        
+        // Hide question display with smooth transition
+        questionDisplay.style.transition = "opacity 0.3s ease, transform 0.3s ease";
+        questionDisplay.style.opacity = "0";
+        questionDisplay.style.transform = "translateY(-10px)";
+        
+        setTimeout(() => {
+            questionDisplay.classList.add("d-none");
+            questionDisplay.style.opacity = "";
+            questionDisplay.style.transform = "";
+        }, 300);
+        
+        // Show input section with smooth fade-in
+        inputSection.style.display = "block";
+        inputSection.style.opacity = "0";
+        inputSection.style.transform = "translateY(10px)";
+        inputSection.style.transition = "opacity 0.3s ease, transform 0.3s ease";
+        
+        setTimeout(() => {
+            inputSection.style.opacity = "1";
+            inputSection.style.transform = "translateY(0)";
+        }, 50);
+        
+        // Clear question input (keep previous answer visible in right panel)
+        questionInput.value = "";
+        
+        // Hide feedback and bot animation
+        feedbackSection.classList.add("d-none");
+        botAnimation.classList.add("d-none");
+        
+        // Re-enable ask button
+        askButton.disabled = false;
+        
+        // Focus on input for immediate typing
+        setTimeout(() => {
+            questionInput.focus();
+            // Scroll input into view if needed
+            questionInput.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }, 350);
     }
 
     // Star rating functionality
@@ -265,6 +423,224 @@
 </script>
 
 <style>
+    /* ===== GLOBAL PAGE LAYOUT (NO PAGE SCROLL) ===== */
+    html, body {
+        height: 100vh;
+        overflow: hidden;
+        margin: 0;
+        padding: 0;
+    }
+    
+    /* Ensure main-content and app-layout are constrained */
+    .main-content.info-buddy-page {
+        height: 100vh;
+        overflow: hidden;
+        padding: 0;
+        margin: 0;
+    }
+    
+    .main-content.info-buddy-page .app-layout {
+        height: 100%;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+    
+    .main-content.info-buddy-page .container {
+        height: 100%;
+        overflow: hidden;
+        padding: 0;
+        margin: 0;
+        max-width: 100%;
+    }
+    
+    /* Main wrapper: fixed full viewport inside main-content, two symmetric halves */
+    .info-buddy-wrapper {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        width: 100%;
+        max-width: 100%;
+        position: relative;
+        margin: 0;
+        padding: 0;
+        gap: 0;
+        overflow: hidden;
+    }
+    
+    /* Left and right panels: perfectly symmetric 50/50 columns */
+    .left-panel,
+    .right-panel {
+        flex: 0 0 50%;
+        max-width: 50%;
+        height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0 30px;
+        box-sizing: border-box;
+        overflow: hidden;
+    }
+
+    /* Subtle vertical divider centered between the two halves */
+    .divider-line {
+        position: absolute;
+        left: 50%;
+        top: 5vh;
+        bottom: 5vh;
+        width: 1px;
+        background-color: #dee2e6;
+        transform: translateX(-50%);
+        z-index: 1;
+        pointer-events: none;
+    }
+
+    /* Cards on both sides: identical size, styling, and structure */
+    .left-panel .card,
+    .right-panel .card {
+        height: 85vh;
+        max-height: 85vh;
+        width: 100%;
+        max-width: 640px;
+        display: flex;
+        flex-direction: column;
+        border-radius: 16px;
+        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+        overflow: hidden;
+    }
+
+    .left-panel .card-body,
+    .right-panel .card-body {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        padding: 1.5rem;
+    }
+
+    /* Answer content scrolls only inside the right card */
+    .response-content {
+        flex: 1 !important;
+        min-height: 0 !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        word-wrap: break-word;
+        word-break: break-word;
+        max-width: 100% !important;
+        /* Remove any max-height constraints - let flex handle it */
+        max-height: none !important;
+        height: auto !important;
+    }
+    
+    /* Ensure markdown content doesn't overflow */
+    .response-content .markdown-content,
+    .response-content p,
+    .response-content ul,
+    .response-content ol,
+    .response-content table {
+        max-width: 100%;
+        overflow-wrap: break-word;
+        word-wrap: break-word;
+    }
+    
+    .response-content table {
+        display: block;
+        overflow-x: auto;
+        white-space: nowrap;
+    }
+
+    /* Integrate with base layout: main-content fills viewport, no extra padding */
+    .main-content {
+        flex: 1 0 auto;
+        padding: 0;
+        display: flex;
+        align-items: stretch;
+        justify-content: center;
+    }
+
+    /* Hide global footer on Info Buddy page so it doesn't affect symmetry */
+    .footer {
+        display: none;
+    }
+
+    /* Bot Animation - only shown when generating */
+    .bot-animation {
+        display: flex;
+        gap: 4px;
+        align-items: center;
+        flex-shrink: 0;
+    }
+    
+    .bot-animation.d-none {
+        display: none !important;
+    }
+
+    .bot-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background-color: #007bff;
+        animation: botPulse 1.4s ease-in-out infinite;
+    }
+
+    .bot-dot:nth-child(2) {
+        animation-delay: 0.2s;
+    }
+
+    .bot-dot:nth-child(3) {
+        animation-delay: 0.4s;
+    }
+
+    @keyframes botPulse {
+        0%, 100% {
+            opacity: 0.3;
+            transform: scale(0.8);
+        }
+        50% {
+            opacity: 1;
+            transform: scale(1.2);
+        }
+    }
+
+    /* Question Bubble - clickable to ask new question */
+    .question-bubble {
+        flex: 1;
+        border-left: 3px solid #007bff;
+        transition: background-color 0.2s ease;
+    }
+    
+    .question-bubble:hover {
+        background-color: #e9ecef !important;
+    }
+    
+    .question-bubble:active {
+        background-color: #dee2e6 !important;
+    }
+
+    @keyframes fadeInRight {
+        from {
+            opacity: 0;
+            transform: translateX(20px);
+        }
+        to {
+            opacity: 1;
+            transform: translateX(0);
+        }
+    }
+
+    @keyframes fadeIn {
+        from {
+            opacity: 0;
+        }
+        to {
+            opacity: 1;
+        }
+    }
+
+    /* Star Rating */
     .star-rating {
         display: flex;
         gap: 0.25rem;
@@ -288,5 +664,12 @@
     .markdown-content p:last-child {
         margin-bottom: 0;
     }
+
+    /* Smooth transitions for all elements */
+    .card {
+        transition: all 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    /* Remove old split-view height overrides to keep pure symmetry */
 </style>
 {% endblock %}

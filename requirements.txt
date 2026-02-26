@@ -26,6 +26,7 @@ nltk
 
 # PDF Parsing
 pdfplumber
+pdf2image
 
 # Environment Variables
 python-dotenv
@@ -38,6 +39,7 @@ requests
 rank_bm25
 google.generativeai
 python-docx
+docx2txt
 langchain-huggingface
 asgiref
 reportlab

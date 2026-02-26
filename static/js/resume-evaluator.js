@@ -64,6 +64,13 @@ document.addEventListener('DOMContentLoaded', function() {
         e.preventDefault();
         submitBtn.disabled = true;
         submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Evaluating...';
+        
+        // Ensure result div is visible and form is ready
+        resultDiv.style.display = 'none'; // Hide initially, will show when results arrive
+        const evaluationFormCard = evaluationForm.closest('.card');
+        if (evaluationFormCard) {
+            evaluationFormCard.style.display = 'block'; // Keep form visible during evaluation
+        }
 
         const formData = new FormData(evaluationForm);
         const resumeInput = document.getElementById('resume');
@@ -129,30 +136,167 @@ document.addEventListener('DOMContentLoaded', function() {
             });
 
             if (!response.ok) {
-                throw new Error('Network response was not ok');
+                // Check if it's an incomplete extraction error
+                const errorData = await response.json().catch(() => ({}));
+                if (errorData.error === 'incomplete_extraction') {
+                    // Show popup for incomplete extraction
+                    showIncompleteExtractionPopup(errorData.completeness, errorData.message);
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = 'Evaluate Resume';
+                    return;
+                }
+                throw new Error(errorData.message || 'Network response was not ok');
             }
 
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             let buffer = '';
             let dataStore = {}; // Store all data from streaming
+            let hasReceivedBasicResults = false; // Track if we've received basic results
 
             while (true) {
                 const { done, value } = await reader.read();
-                if (done) break;
+                if (done) {
+                    console.log('Stream ended. Has received basic results:', hasReceivedBasicResults);
+                    // If stream ended but we haven't received basic results, show an error
+                    if (!hasReceivedBasicResults) {
+                        console.error('Stream ended without receiving basic_results!');
+                        alert('Evaluation completed but results were not received. Please try again.');
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = 'Evaluate Resume';
+                    }
+                    break;
+                }
 
                 buffer += decoder.decode(value, { stream: true });
                 const lines = buffer.split('\n');
                 buffer = lines.pop(); // Keep incomplete line in buffer
 
                 for (const line of lines) {
+                    if (line.trim() === '') continue; // Skip empty lines
                     if (line.startsWith('data: ')) {
                         try {
                             const eventData = JSON.parse(line.slice(6));
+                            console.log('Received event:', eventData.status, eventData);
                             
                             if (eventData.status === 'basic_results') {
+                                hasReceivedBasicResults = true;
                                 // Store and display basic results
                                 dataStore = { ...dataStore, ...eventData };
+                                
+                                // Store resume_path globally for merge download
+                                // Use resume_path if available, otherwise fall back to filename
+                                window.currentResumePath = eventData.resume_path || eventData.filename || null;
+                                console.log("Received resume_path:", eventData.resume_path);
+                                console.log("Received filename:", eventData.filename);
+                                console.log("Stored window.currentResumePath:", window.currentResumePath);
+                                
+                                // NEW: Track whether merging is allowed based on original file extension (PDF only)
+                                window.canMergeResume = (eventData.can_merge !== false);
+                                window.resumeOriginalExt = eventData.original_file_ext || null;
+                                console.log("Original resume extension:", window.resumeOriginalExt);
+                                console.log("Can merge resume:", window.canMergeResume);
+                                
+                                // Update the \"Download with Resume\" button appearance and tooltip based on merge capability
+                                const mergeBtn = document.getElementById('downloadEvaluationWithResume');
+                                const mergeWarning = document.getElementById('downloadWithResumeWarning');
+                                if (mergeBtn) {
+                                    if (!window.canMergeResume) {
+                                        // Make button slightly translucent and non-clickable looking
+                                        mergeBtn.style.opacity = '0.6';
+                                        mergeBtn.style.cursor = 'not-allowed';
+                                        // Show professional inline warning below the button
+                                        if (mergeWarning) {
+                                            mergeWarning.textContent =
+                                                'The uploaded resume is a DOCX, not a PDF. Merging is only supported for PDF resumes. Please upload a PDF resume if you want a merged Resume + Evaluation PDF.';
+                                            mergeWarning.classList.remove('d-none');
+                                        }
+                                    } else {
+                                        // Restore normal appearance
+                                        mergeBtn.style.opacity = '';
+                                        mergeBtn.style.cursor = '';
+                                        if (mergeWarning) {
+                                            mergeWarning.classList.add('d-none');
+                                            mergeWarning.textContent = '';
+                                        }
+                                    }
+                                }
+                                
+                                // NEW: Store db_id immediately from basic_results (evaluation saved early)
+                                if (eventData.db_id) {
+                                    window.currentEvaluationId = eventData.db_id;
+                                    console.log("✅ [EARLY] Set window.currentEvaluationId from basic_results:", window.currentEvaluationId);
+                                    
+                                    // Update hidden input immediately
+                                    const evalIdInput = document.getElementById('evaluation-id');
+                                    if (evalIdInput) {
+                                        evalIdInput.value = window.currentEvaluationId;
+                                        console.log("✅ [EARLY] Updated hidden input evaluation-id to:", window.currentEvaluationId);
+                                    }
+                                    
+                                    if (currentEvaluationData) {
+                                        currentEvaluationData.id = window.currentEvaluationId;
+                                        console.log("✅ [EARLY] Updated currentEvaluationData.id to:", window.currentEvaluationId);
+                                    }
+                                } else {
+                                    console.warn("⚠️ [EARLY] basic_results did not include db_id");
+                                }
+                                
+                                // Hide form and show results
+                                console.log('Received basic_results, hiding form and showing results');
+                                
+                                // Hide the form card (the card containing the form)
+                                const evaluationFormCard = evaluationForm.closest('.card');
+                                if (evaluationFormCard) {
+                                    evaluationFormCard.style.display = 'none';
+                                    console.log('Form card hidden');
+                                }
+                                
+                                // Also try to hide the parent container if it exists
+                                const matchmakerContent = document.getElementById('matchmakerContent');
+                                if (matchmakerContent) {
+                                    const formRow = matchmakerContent.querySelector('.row.mb-4.justify-content-center');
+                                    if (formRow) {
+                                        formRow.style.display = 'none';
+                                        console.log('Form row hidden');
+                                    }
+                                }
+                                
+                                // Ensure result div is visible - try multiple ways
+                                let resultDivToShow = resultDiv;
+                                if (!resultDivToShow) {
+                                    console.warn('resultDiv not found initially, searching again...');
+                                    resultDivToShow = document.getElementById('evaluation-result');
+                                }
+                                
+                                if (resultDivToShow) {
+                                    // Force show with multiple methods
+                                    resultDivToShow.style.setProperty('display', 'block', 'important');
+                                    resultDivToShow.style.setProperty('visibility', 'visible', 'important');
+                                    resultDivToShow.classList.remove('d-none');
+                                    resultDivToShow.removeAttribute('hidden');
+                                    resultDivToShow.removeAttribute('style'); // Remove inline style that might have display:none
+                                    resultDivToShow.style.display = 'block';
+                                    resultDivToShow.style.visibility = 'visible';
+                                    
+                                    // Verify it's actually visible
+                                    const computedStyle = window.getComputedStyle(resultDivToShow);
+                                    console.log('Result div shown - display:', computedStyle.display, 'visibility:', computedStyle.visibility);
+                                    
+                                    if (computedStyle.display === 'none') {
+                                        console.error('Result div still hidden after setting display!');
+                                        // Last resort: create a new div or move content
+                                        alert('Warning: Results may not be visible. Please scroll down to see results.');
+                                    }
+                                } else {
+                                    console.error('resultDiv element not found!');
+                                    alert('Error: Results container not found. Please refresh the page.');
+                                    submitBtn.disabled = false;
+                                    submitBtn.innerHTML = 'Evaluate Resume';
+                                    return;
+                                }
+                                
+                                // Call displayBasicResults after ensuring div is visible
                                 displayBasicResults(dataStore);
                                 
                             } else if (eventData.status === 'additional_data') {
@@ -170,15 +314,70 @@ document.addEventListener('DOMContentLoaded', function() {
                                 
                             } else if (eventData.status === 'complete') {
                                 console.log('Evaluation complete!');
-                                // Update evaluation ID with database ID for feedback submission
-                                if (eventData.db_id) {
-                                    document.getElementById('evaluation-id').value = eventData.db_id;
-                                    console.log('Updated evaluation ID to database ID:', eventData.db_id);
+                                console.log('Complete event data:', eventData);
+                                
+                                // Update evaluation ID with database ID - this is the ONLY valid ID from now on
+                                // Backend sends 'db_id' in the complete event
+                                const dbId = eventData.db_id;
+                                
+                                if (dbId) {
+                                    window.currentEvaluationId = dbId;
+                                    console.log('✅ Set window.currentEvaluationId to:', window.currentEvaluationId);
+                                    
+                                    // Update hidden input and currentEvaluationData
+                                    const evalIdInput = document.getElementById('evaluation-id');
+                                    if (evalIdInput) {
+                                        evalIdInput.value = window.currentEvaluationId;
+                                        console.log('✅ Updated hidden input evaluation-id to:', window.currentEvaluationId);
+                                    } else {
+                                        console.error('❌ ERROR: evaluation-id input element not found!');
+                                    }
+                                    
+                                    if (currentEvaluationData) {
+                                        currentEvaluationData.id = window.currentEvaluationId;
+                                        console.log('✅ Updated currentEvaluationData.id to:', window.currentEvaluationId);
+                                    }
+                                    
+                                    console.log('✅ Final evaluation ID:', window.currentEvaluationId);
+                                    
+                                    // NOW make all API calls that need the DB ID (feedback check, etc.)
+                                    console.log("✅ Using evaluation ID for feedback check:", window.currentEvaluationId);
+                                    checkEvaluationFeedbackExists(window.currentEvaluationId);
+                                    
+                                    // Enable the download button now that we have the ID
+                                    const downloadBtn = document.getElementById('downloadEvaluationWithResumeBtn');
+                                    if (downloadBtn) {
+                                        downloadBtn.disabled = false;
+                                        console.log('✅ Download with Resume button enabled');
+                                    }
+                                } else {
+                                    console.error('❌ ERROR: complete event did not include db_id!', eventData);
+                                    console.error('Complete event keys:', Object.keys(eventData));
+                                    alert('Warning: Evaluation completed but ID not received. Download with Resume may not work. Please check browser console (F12) for details.');
                                 }
                                 
+                                // Do NOT use eval_id (UUID) anywhere after this point
+                                
                             } else if (eventData.status === 'error') {
-                                throw new Error(eventData.message);
+                                // Check if it's an incomplete extraction error
+                                if (eventData.error === 'incomplete_extraction') {
+                                    showIncompleteExtractionPopup(eventData.completeness, eventData.message);
+                                    submitBtn.disabled = false;
+                                    submitBtn.innerHTML = 'Evaluate Resume';
+                                    return;
+                                }
+                                // Mark that we received an error (so we don't show "results not received")
+                                hasReceivedBasicResults = true; // Prevent the "results not received" error
+                                console.error('Received error status:', eventData.message);
+                                alert('Evaluation Error: ' + (eventData.message || 'Unknown error occurred'));
+                                submitBtn.disabled = false;
+                                submitBtn.innerHTML = 'Evaluate Resume';
+                                return;
+                            } else if (eventData.status === 'processing' || eventData.status === 'step1' || eventData.status === 'step2' || eventData.status === 'step3' || eventData.status === 'step4') {
+                                // These are progress updates, just log them
+                                console.log('Progress update:', eventData.status, eventData.message);
                             }
+                            // NOTE: 'complete' event is handled above (line 264), this duplicate handler is removed
                         } catch (parseError) {
                             console.error('Error parsing SSE data:', parseError);
                         }
@@ -186,8 +385,28 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
         } catch (error) {
-            console.error('Error:', error);
-            alert('An error occurred while evaluating the resume: ' + error.message);
+            console.error('Error in evaluation:', error);
+            console.error('Error stack:', error.stack);
+            // Check if error message contains incomplete extraction info
+            if (error.message && error.message.includes('incomplete_extraction')) {
+                try {
+                    const errorData = JSON.parse(error.message);
+                    if (errorData.error === 'incomplete_extraction') {
+                        showIncompleteExtractionPopup(errorData.completeness, errorData.message);
+                        return;
+                    }
+                } catch (e) {
+                    // Not a JSON error, show regular alert
+                }
+            }
+            // Show detailed error message
+            const errorMsg = error.message || 'Unknown error occurred';
+            console.error('Full error details:', {
+                message: errorMsg,
+                name: error.name,
+                stack: error.stack
+            });
+            alert('Error: ' + errorMsg + '\n\nPlease check the browser console (F12) for more details.');
         } finally {
             submitBtn.disabled = false;
             submitBtn.innerHTML = 'Evaluate Resume';
@@ -195,15 +414,63 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     function displayBasicResults(data) {
-        resultDiv.style.display = 'block';
+        console.log('displayBasicResults called with data:', data);
+        
+        // Try to find resultDiv again in case it wasn't found initially
+        let resultDivToUse = resultDiv;
+        if (!resultDivToUse) {
+            console.warn('resultDiv not found initially, trying to find it again...');
+            resultDivToUse = document.getElementById('evaluation-result');
+        }
+        
+        if (!resultDivToUse) {
+            console.error('resultDiv not found! Cannot display results.');
+            alert('Error: Results container not found. Please refresh the page.');
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = 'Evaluate Resume';
+            return;
+        }
+        
+        // Force show the result div with multiple methods
+        resultDivToUse.style.display = 'block';
+        resultDivToUse.style.visibility = 'visible';
+        resultDivToUse.classList.remove('d-none');
+        resultDivToUse.removeAttribute('hidden');
+        resultDivToUse.setAttribute('style', 'display: block !important; visibility: visible !important;');
+        console.log('Result div display set to block, visibility set to visible');
+        console.log('Result div computed style:', window.getComputedStyle(resultDivToUse).display);
         
         // Store evaluation data for PDF generation
         currentEvaluationData = data;
+        // CRITICAL: Do NOT store UUID id from basic_results - wait for complete event to get DB ID
+        // Remove any UUID id that might be in basic_results
+        if (currentEvaluationData.id && typeof currentEvaluationData.id === 'string' && currentEvaluationData.id.includes('-')) {
+            // This is a UUID, not a DB ID - remove it to prevent confusion
+            delete currentEvaluationData.id;
+        }
+        // Ensure resume_path is also stored in currentEvaluationData if not already present
+        if (!currentEvaluationData.resume_path && window.currentResumePath) {
+            currentEvaluationData.resume_path = window.currentResumePath;
+        }
+        // Also ensure resume_path is set from filename if available
+        if (!currentEvaluationData.resume_path && currentEvaluationData.filename) {
+            currentEvaluationData.resume_path = currentEvaluationData.filename;
+        }
+        console.log("currentEvaluationData after displayBasicResults:", currentEvaluationData);
         
-        // Scroll to results
+        // Scroll to results after a short delay to ensure DOM is updated
         setTimeout(() => {
-            resultDiv.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }, 100);
+            if (resultDivToUse) {
+                try {
+                    resultDivToUse.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    console.log('Scrolled to results');
+                } catch (scrollError) {
+                    console.warn('Scroll error:', scrollError);
+                    // Fallback: just show the div
+                    window.scrollTo(0, resultDivToUse.offsetTop);
+                }
+            }
+        }, 200);
 
         // Match Score
         document.getElementById('progress-bar').style.width = data.match_percentage + '%';
@@ -260,13 +527,12 @@ document.addEventListener('DOMContentLoaded', function() {
             qualificationCard.style.display = 'none';
         }
 
-        // Set evaluation ID for feedback
+        // Set evaluation ID for feedback - but DO NOT call API yet (wait for 'complete' event)
+        // Only set the hidden input value, don't make API calls here
         document.getElementById('evaluation-id').value = data.id;
         
-        // Check if feedback already submitted for this evaluation
-        if (data.id) {
-            checkEvaluationFeedbackExists(data.id);
-        }
+        // DO NOT call checkEvaluationFeedbackExists here - it will be called in 'complete' event
+        // This prevents using UUID before DB ID is available
     }
 
     function updateMatchFactor(id, value) {
@@ -510,7 +776,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Download Evaluation PDF button
+    // Download Evaluation PDF button (standalone)
     const downloadEvaluationPDFBtn = document.getElementById('downloadEvaluationPDF');
     if (downloadEvaluationPDFBtn) {
         downloadEvaluationPDFBtn.addEventListener('click', async function() {
@@ -556,6 +822,141 @@ document.addEventListener('DOMContentLoaded', function() {
             } finally {
                 downloadEvaluationPDFBtn.disabled = false;
                 downloadEvaluationPDFBtn.innerHTML = '<i class="bi bi-download"></i> Download PDF';
+            }
+        });
+    }
+
+    // Download Evaluation with Resume PDF button (merged)
+    const downloadEvaluationWithResumeBtn = document.getElementById('downloadEvaluationWithResume');
+    if (downloadEvaluationWithResumeBtn) {
+        downloadEvaluationWithResumeBtn.addEventListener('click', async function() {
+            if (!currentEvaluationData) {
+                alert('No evaluation data to download.');
+                return;
+            }
+            downloadEvaluationWithResumeBtn.disabled = true;
+            downloadEvaluationWithResumeBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Generating PDF...';
+
+            try {
+                // IMPORTANT: Use DB ID (integer), NOT UUID
+                // ONLY use window.currentEvaluationId (set from 'complete' or basic_results with db_id)
+                // NEVER use UUID from basic_results
+
+                // If merging is not allowed (e.g., DOCX upload), show message and exit early
+                if (window.canMergeResume === false) {
+                    alert("Cannot merge: the uploaded resume is a DOCX, not a PDF. Merging is only supported for PDF resumes.\n\nPlease upload a PDF resume if you want to download a merged Resume + Evaluation PDF.");
+                    downloadEvaluationWithResumeBtn.disabled = false;
+                    downloadEvaluationWithResumeBtn.innerHTML = 'Download with Resume';
+                    return;
+                }
+
+                console.log("🔍 [MERGE DEBUG] Checking for evaluation ID...");
+                console.log("🔍 [MERGE DEBUG] window.currentEvaluationId:", window.currentEvaluationId);
+                
+                const evalIdInput = document.getElementById('evaluation-id');
+                const evalIdFromInput = evalIdInput ? evalIdInput.value : null;
+                console.log("🔍 [MERGE DEBUG] evalIdFromInput (hidden input):", evalIdFromInput);
+                console.log("🔍 [MERGE DEBUG] currentEvaluationData?.id:", currentEvaluationData?.id);
+                
+                let evalIdToUse = window.currentEvaluationId || evalIdFromInput;
+                
+                // Validate that evalIdToUse is NOT a UUID (UUIDs contain hyphens)
+                if (evalIdToUse && typeof evalIdToUse === 'string' && evalIdToUse.includes('-')) {
+                    console.error("ERROR: evalIdToUse is a UUID, not a DB ID:", evalIdToUse);
+                    evalIdToUse = null;
+                }
+                
+                // Only use currentEvaluationData.id if it's a number (DB ID), not a UUID string
+                if (!evalIdToUse && currentEvaluationData?.id) {
+                    const idValue = currentEvaluationData.id;
+                    // Check if it's a number (DB ID) or numeric string, NOT a UUID
+                    if (typeof idValue === 'number' || (typeof idValue === 'string' && /^\d+$/.test(idValue) && !idValue.includes('-'))) {
+                        evalIdToUse = idValue;
+                    } else {
+                        console.error("ERROR: currentEvaluationData.id is a UUID:", idValue);
+                    }
+                }
+                
+                if (!evalIdToUse) {
+                    console.error("❌ [MERGE DEBUG] No valid evaluation ID found!");
+                    console.error("❌ [MERGE DEBUG] window.currentEvaluationId:", window.currentEvaluationId);
+                    console.error("❌ [MERGE DEBUG] evalIdFromInput:", evalIdFromInput);
+                    console.error("❌ [MERGE DEBUG] currentEvaluationData:", currentEvaluationData);
+                    alert("Error: Evaluation ID not available. Please wait for evaluation to complete and try again.\n\nIf this persists, refresh the page and run a new evaluation.\n\nCheck browser console (F12) for debug details.");
+                    downloadEvaluationWithResumeBtn.disabled = false;
+                    downloadEvaluationWithResumeBtn.innerHTML = 'Download with Resume';
+                    return;
+                }
+                
+                console.log("Using evaluation ID:", evalIdToUse);
+                console.log("Type of evalIdToUse:", typeof evalIdToUse);
+                console.log("window.currentEvaluationId:", window.currentEvaluationId);
+                console.log("evalIdFromInput:", evalIdFromInput);
+                
+                // Validate evalIdToUse is not undefined, null, or empty
+                if (!evalIdToUse || evalIdToUse === 'undefined' || evalIdToUse === 'null') {
+                    console.error("ERROR: evalIdToUse is invalid:", evalIdToUse);
+                    alert("Error: Evaluation ID not available. Please wait for evaluation to complete and try again.\n\nIf this persists, refresh the page and run a new evaluation.");
+                    downloadEvaluationWithResumeBtn.disabled = false;
+                    downloadEvaluationWithResumeBtn.innerHTML = 'Download with Resume';
+                    return;
+                }
+                
+                // Get resume_path from global variable (set during streaming)
+                // Try multiple sources: global variable, currentEvaluationData, or filename
+                const resumePathToSend = window.currentResumePath || 
+                                        currentEvaluationData?.resume_path || 
+                                        currentEvaluationData?.filename || 
+                                        null;
+                
+                console.log("Sending resume_path:", resumePathToSend);
+                console.log("Sending evaluation_id:", evalIdToUse);
+                console.log("window.currentResumePath:", window.currentResumePath);
+                console.log("currentEvaluationData:", currentEvaluationData);
+                
+                if (!resumePathToSend) {
+                    alert("Resume path missing. Please refresh evaluation.\n\nDebug info: Check browser console (F12) for details.");
+                    downloadEvaluationWithResumeBtn.disabled = false;
+                    downloadEvaluationWithResumeBtn.innerHTML = 'Download with Resume';
+                    return;
+                }
+
+                const response = await fetch('/api/download-evaluation-with-resume', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        evaluation_id: evalIdToUse,
+                        evaluation_data: currentEvaluationData,
+                        resume_path: resumePathToSend
+                    })
+                });
+
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.style.display = 'none';
+                    a.href = url;
+                    const filename = currentEvaluationData.filename || 'Resume_With_Evaluation';
+                    const filename_base = filename.replace(/\.[^/.]+$/, ""); // Remove extension
+                    const timestamp = new Date().getTime();
+                    a.download = `Resume_With_Evaluation_${filename_base}_${timestamp}.pdf`;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+                } else {
+                    const data = await response.json();
+                    throw new Error(data.message || 'Failed to generate merged PDF');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Failed to download merged PDF: ' + error.message);
+            } finally {
+                downloadEvaluationWithResumeBtn.disabled = false;
+                downloadEvaluationWithResumeBtn.innerHTML = '<i class="bi bi-file-earmark-pdf"></i> Download with Resume';
             }
         });
     }
@@ -647,6 +1048,60 @@ document.addEventListener('DOMContentLoaded', function() {
                 console.log('Displaying stored evaluation');
                 displayStoredEvaluation(evaluation);
                 sessionStorage.removeItem('viewEvaluationData'); // Clean up
+            }
+        } else {
+            // Check for auto-fill parameters (from handbook navigation)
+            const jobId = urlParams.get('job_id');
+            const jobTitle = urlParams.get('job_title');
+            const jobDescription = urlParams.get('job_description');
+            const additionalContext = urlParams.get('additional_context');
+            
+            if (jobId || jobTitle || jobDescription) {
+                // Auto-fill the form with query parameters
+                setTimeout(() => {
+                    const jobIdInput = document.getElementById('oorwin_job_id');
+                    const jobTitleInput = document.getElementById('job_title');
+                    const jobDescTextarea = document.getElementById('job_description');
+                    const evalAdditionalContext = document.getElementById('evaluation_additional_context');
+                    
+                    if (jobIdInput && jobId) {
+                        jobIdInput.value = jobId;
+                    }
+                    if (jobTitleInput && jobTitle) {
+                        jobTitleInput.value = decodeURIComponent(jobTitle);
+                    }
+                    if (jobDescTextarea && jobDescription) {
+                        jobDescTextarea.value = decodeURIComponent(jobDescription);
+                    }
+                    if (evalAdditionalContext && additionalContext) {
+                        evalAdditionalContext.value = decodeURIComponent(additionalContext);
+                    }
+                    
+                    // Switch to matchmaker section if on Pluto page
+                    const matchmakerSidebarItem = document.querySelector('.sidebar-item[data-section="matchmaker"]');
+                    const matchmakerSection = document.getElementById('matchmaker-section');
+                    const handbookSection = document.getElementById('handbook-section');
+                    
+                    if (matchmakerSidebarItem && matchmakerSection) {
+                        // Remove active from all sidebar items
+                        document.querySelectorAll('.sidebar-item').forEach(item => {
+                            item.classList.remove('active');
+                        });
+                        
+                        // Add active to matchmaker
+                        matchmakerSidebarItem.classList.add('active');
+                        
+                        // Show matchmaker section, hide handbook section if it exists
+                        if (handbookSection) handbookSection.style.display = 'none';
+                        matchmakerSection.style.display = 'block';
+                    }
+                    
+                    // Scroll to form
+                    const formElement = document.getElementById('evaluationForm');
+                    if (formElement) {
+                        formElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }
+                }, 300);
             }
         }
     }
@@ -832,49 +1287,83 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
         
-        // Auto-fill Match Maker form
-        const jobIdInput = document.getElementById('oorwin_job_id');
-        const jobTitleInput = document.getElementById('job_title');
-        const jobDescTextarea = document.getElementById('job_description');
-        const evalAdditionalContext = document.getElementById('evaluation_additional_context');
-        
-        if (jobIdInput && currentHandbookData.jobId) {
-            jobIdInput.value = currentHandbookData.jobId;
-        }
-        if (jobTitleInput) {
-            jobTitleInput.value = currentHandbookData.jobTitle;
-        }
-        if (jobDescTextarea) {
-            jobDescTextarea.value = currentHandbookData.jobDescription;
-        }
-        if (evalAdditionalContext) {
-            evalAdditionalContext.value = currentHandbookData.additionalContext || '';
-        }
-        
-        // Switch to Match Maker section (sidebar)
+        // Try to switch to Match Maker section on the same page first
         const matchmakerSidebarItem = document.querySelector('.sidebar-item[data-section="matchmaker"]');
-        if (matchmakerSidebarItem) {
-            matchmakerSidebarItem.click();
+        const handbookSection = document.getElementById('handbook-section');
+        const matchmakerSection = document.getElementById('matchmaker-section');
+        
+        if (matchmakerSidebarItem && matchmakerSection && handbookSection) {
+            // We're on the Pluto page with sections - switch sections
+            // Remove active from all sidebar items
+            document.querySelectorAll('.sidebar-item').forEach(item => {
+                item.classList.remove('active');
+            });
             
-            // Scroll to top of the page
-            window.scrollTo({ top: 0, behavior: 'smooth' });
+            // Add active to matchmaker
+            matchmakerSidebarItem.classList.add('active');
             
-            // Show success notification
-            const notification = document.createElement('div');
-            notification.className = 'alert alert-info alert-dismissible fade show';
-            notification.style.cssText = 'position: fixed; top: 20px; right: 20px; z-index: 9999; max-width: 400px;';
-            notification.innerHTML = `
-                <strong>✓ Ready to Evaluate!</strong> 
-                Job details have been auto-filled. Upload candidate resume(s) to start evaluating.
-                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-            `;
-            document.body.appendChild(notification);
+            // Show matchmaker section, hide handbook section
+            handbookSection.style.display = 'none';
+            matchmakerSection.style.display = 'block';
             
-            // Auto-remove notification after 5 seconds
+            // Auto-fill Match Maker form
             setTimeout(() => {
-                notification.classList.remove('show');
-                setTimeout(() => notification.remove(), 150);
-            }, 5000);
+                const jobIdInput = document.getElementById('oorwin_job_id');
+                const jobTitleInput = document.getElementById('job_title');
+                const jobDescTextarea = document.getElementById('job_description');
+                const evalAdditionalContext = document.getElementById('evaluation_additional_context');
+                
+                if (jobIdInput && currentHandbookData.jobId) {
+                    jobIdInput.value = currentHandbookData.jobId;
+                }
+                if (jobTitleInput) {
+                    jobTitleInput.value = currentHandbookData.jobTitle;
+                }
+                if (jobDescTextarea) {
+                    jobDescTextarea.value = currentHandbookData.jobDescription;
+                }
+                if (evalAdditionalContext) {
+                    evalAdditionalContext.value = currentHandbookData.additionalContext || '';
+                }
+                
+                // Scroll to top of the page
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+                
+                // Show success notification
+                const notification = document.createElement('div');
+                notification.className = 'alert alert-info alert-dismissible fade show';
+                notification.style.cssText = 'position: fixed; top: 20px; right: 20px; z-index: 9999; max-width: 400px;';
+                notification.innerHTML = `
+                    <strong>✓ Ready to Evaluate!</strong> 
+                    Job details have been auto-filled. Upload candidate resume(s) to start evaluating.
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                `;
+                document.body.appendChild(notification);
+                
+                // Auto-remove notification after 5 seconds
+                setTimeout(() => {
+                    notification.classList.remove('show');
+                    setTimeout(() => notification.remove(), 150);
+                }, 5000);
+            }, 100); // Small delay to ensure section is visible
+        } else {
+            // We're not on the Pluto page - navigate to resume evaluator with job data
+            const params = new URLSearchParams();
+            if (currentHandbookData.jobId) {
+                params.append('job_id', currentHandbookData.jobId);
+            }
+            if (currentHandbookData.jobTitle) {
+                params.append('job_title', currentHandbookData.jobTitle);
+            }
+            if (currentHandbookData.jobDescription) {
+                params.append('job_description', currentHandbookData.jobDescription);
+            }
+            if (currentHandbookData.additionalContext) {
+                params.append('additional_context', currentHandbookData.additionalContext);
+            }
+            
+            // Navigate to resume evaluator page
+            window.location.href = `/resume-evaluator?${params.toString()}`;
         }
     }
     
@@ -1901,8 +2390,11 @@ let currentHandbookId = null;
 
 // Check if feedback already exists for evaluation
 async function checkEvaluationFeedbackExists(evaluationId) {
+    // Use window.currentEvaluationId if available (DB ID), otherwise fall back to provided ID
+    const idToUse = window.currentEvaluationId || evaluationId;
+    console.log("Using evaluation ID for feedback check:", idToUse);
     try {
-        const response = await fetch(`/api/feedback/check/evaluation/${evaluationId}`);
+        const response = await fetch(`/api/feedback/check/evaluation/${idToUse}`);
         const data = await response.json();
         
         if (data.success && data.exists) {
@@ -1921,6 +2413,111 @@ async function checkEvaluationFeedbackExists(evaluationId) {
         }
     } catch (error) {
         console.error('Error checking evaluation feedback:', error);
+    }
+}
+
+// Show popup for incomplete text extraction
+function showIncompleteExtractionPopup(completeness, message) {
+    // Create modal HTML
+    const modalHTML = `
+        <div class="modal fade" id="incompleteExtractionModal" tabindex="-1" aria-labelledby="incompleteExtractionModalLabel" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header bg-warning">
+                        <h5 class="modal-title" id="incompleteExtractionModalLabel">
+                            <i class="bi bi-exclamation-triangle"></i> Incomplete Text Extraction
+                        </h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="alert alert-warning">
+                            <p><strong>Text extraction was incomplete.</strong></p>
+                            <p>${message || 'Please upload a normal PDF or DOCX file for best compatibility.'}</p>
+                        </div>
+                        <p class="mb-0"><strong>Recommended:</strong></p>
+                        <ul>
+                            <li>Use a text-based PDF (not scanned)</li>
+                            <li>Use DOCX format (modern Word document)</li>
+                            <li>Avoid scanned images or complex layouts</li>
+                        </ul>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn btn-primary" id="uploadNewFileBtn">
+                            <i class="bi bi-upload"></i> Upload New File
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    // Remove existing modal if any
+    const existingModal = document.getElementById('incompleteExtractionModal');
+    if (existingModal) {
+        existingModal.remove();
+    }
+    
+    // Add modal to body
+    document.body.insertAdjacentHTML('beforeend', modalHTML);
+    
+    // Show modal
+    const modalElement = document.getElementById('incompleteExtractionModal');
+    if (modalElement && typeof bootstrap !== 'undefined') {
+        const modal = new bootstrap.Modal(modalElement);
+        modal.show();
+        
+        // Add click handler for Upload button
+        const uploadBtn = document.getElementById('uploadNewFileBtn');
+        if (uploadBtn) {
+            uploadBtn.addEventListener('click', function() {
+                // Close the modal first
+                modal.hide();
+                
+                // Find the resume file input and trigger click
+                const resumeInput = document.getElementById('resume');
+                if (resumeInput) {
+                    // Clear previous file selection
+                    resumeInput.value = '';
+                    // Trigger file picker
+                    resumeInput.click();
+                } else {
+                    console.error('Resume file input not found');
+                    alert('File input not found. Please refresh the page and try again.');
+                }
+            });
+        }
+        
+        // Remove modal from DOM when hidden
+        modalElement.addEventListener('hidden.bs.modal', function() {
+            modalElement.remove();
+        });
+    } else if (modalElement && typeof $ !== 'undefined') {
+        // Fallback to jQuery Bootstrap
+        $(modalElement).modal('show');
+        
+        // Add click handler for Upload button
+        $('#uploadNewFileBtn').on('click', function() {
+            $(modalElement).modal('hide');
+            const resumeInput = document.getElementById('resume');
+            if (resumeInput) {
+                resumeInput.value = '';
+                resumeInput.click();
+            }
+        });
+        
+        $(modalElement).on('hidden.bs.modal', function() {
+            $(modalElement).remove();
+        });
+    } else {
+        // Last resort: Simple alert with option to upload
+        if (confirm(`Incomplete Text Extraction\n\n${message || 'Please upload a normal PDF or DOCX file for best compatibility.'}\n\nClick OK to select a new file.`)) {
+            const resumeInput = document.getElementById('resume');
+            if (resumeInput) {
+                resumeInput.value = '';
+                resumeInput.click();
+            }
+        }
     }
 }
 

@@ -25,12 +25,14 @@
             margin: 0;
             padding: 0;
         }
-
+        
         body {
             font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
             background-color: #f8f9fa;
             display: flex;
             flex-direction: column;
+            /* Smooth theme / background transitions */
+            transition: background-color 0.3s ease, color 0.3s ease;
         }
 
         .navbar {
@@ -45,6 +47,11 @@
             display: flex;
             flex-direction: column;
             padding: 1rem 0;
+            /* Subtle enter animation for whole page content */
+            opacity: 0;
+            transform: translateY(8px);
+            animation: mainFadeIn 0.45s ease-out forwards;
+            animation-delay: 0.05s;
         }
 
         .footer {
@@ -70,12 +77,20 @@
         .nav-link {
             color: var(--primary-blue) !important;
             font-weight: 500;
-            transition: color 0.3s ease;
             padding: 0.5rem 1rem;
+            /* Smoother hover / focus */
+            transition:
+                color 0.2s ease,
+                background-color 0.2s ease,
+                border-color 0.2s ease,
+                box-shadow 0.2s ease,
+                transform 0.15s ease;
         }
-
+        
         .nav-link:hover {
             color: var(--primary-orange) !important;
+            background-color: rgba(224, 81, 0, 0.06);
+            transform: translateY(-1px);
         }
 
         .nav-link.active {
@@ -86,13 +101,22 @@
         .card {
             border: none;
             box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
             border-radius: 8px;
+            /* Shared smooth interactions */
+            transition:
+                transform 0.22s ease,
+                box-shadow 0.22s ease,
+                background-color 0.22s ease,
+                border-color 0.22s ease;
+            /* Gentle fade / slide-in on first paint */
+            opacity: 0;
+            transform: translateY(6px);
+            animation: cardFadeIn 0.38s ease-out forwards;
         }
-
+        
         .card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            transform: translateY(-3px);
+            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.16);
         }
 
         .card-header {
@@ -108,7 +132,7 @@
             padding: 0.5rem 1.5rem;
             font-weight: 500;
         }
-
+        
         .btn-primary:hover {
             background-color: #005a94;
             border-color: #005a94;
@@ -120,7 +144,7 @@
             padding: 0.5rem 1.5rem;
             font-weight: 500;
         }
-
+        
         .btn-success:hover {
             background-color: #4f5e00;
             border-color: #4f5e00;
@@ -133,11 +157,32 @@
             padding: 0.5rem 1.5rem;
             font-weight: 500;
         }
-
+        
         .btn-warning:hover {
             background-color: #e5b200;
             border-color: #e5b200;
             color: #000;
+        }
+
+        /* Shared button interaction smoothing */
+        .btn {
+            transition:
+                background-color 0.2s ease,
+                border-color 0.2s ease,
+                color 0.2s ease,
+                box-shadow 0.18s ease,
+                transform 0.14s ease;
+        }
+
+        .btn:focus-visible {
+            outline: 2px solid var(--primary-blue);
+            outline-offset: 2px;
+            box-shadow: 0 0 0 0.18rem rgba(0,104,171,0.35);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+            box-shadow: 0 1px 3px rgba(15, 23, 42, 0.35);
         }
 
         .progress {
@@ -211,6 +256,324 @@
         .footer .text-muted {
             color: #6c757d !important;
         }
+
+        /* User menu (top-right) - smooth hover popup similar to tools switcher */
+        .user-menu-dropdown {
+            position: relative;
+        }
+
+        .user-menu-toggle {
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+            cursor: pointer;
+        }
+
+        .user-menu-menu {
+            position: absolute;
+            right: 0;
+            top: 120%;
+            min-width: 220px;
+            background: #ffffff;
+            border-radius: 10px;
+            box-shadow: 0 18px 45px rgba(15, 23, 42, 0.22);
+            padding: 0.75rem 0.75rem 0.7rem;
+            opacity: 0;
+            transform: translateY(-8px) scale(0.95);
+            pointer-events: none;
+            visibility: hidden;
+            transition:
+                opacity 0.18s ease,
+                transform 0.18s ease,
+                visibility 0.18s ease;
+            z-index: 1300;
+        }
+
+        .user-menu-menu .user-menu-title {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #6c757d;
+            margin-bottom: 0.35rem;
+        }
+
+        .user-menu-menu .btn {
+            font-size: 0.85rem;
+            padding: 0.35rem 0.75rem;
+        }
+
+        .user-menu-dropdown.open .user-menu-menu {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+            pointer-events: auto;
+            visibility: visible;
+        }
+
+        /* Keyframes for smooth but safe fade/slide animations */
+        @keyframes mainFadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes cardFadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(6px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* ============================
+           GLOBAL SIDEBAR LAYOUT
+           ============================ */
+        .app-layout {
+            display: flex;
+            width: 100%;
+            min-height: calc(100vh - 120px);
+            position: relative;
+        }
+
+        .hr-sidebar {
+            position: fixed;
+            left: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            box-shadow: 2px 0 10px rgba(0,0,0,0.12);
+            transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1), 
+                        padding 0.4s cubic-bezier(0.4, 0, 0.2, 1), 
+                        box-shadow 0.4s cubic-bezier(0.4, 0, 0.2, 1),
+                        align-items 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            z-index: 1000;
+            border-radius: 0 15px 15px 0;
+            padding: 15px 10px;
+            width: 70px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            overflow: hidden;
+        }
+
+        .hr-sidebar:hover {
+            width: 240px;
+            padding: 15px 16px;
+            align-items: flex-start;
+            box-shadow: 4px 0 16px rgba(0,0,0,0.18);
+            overflow: visible;
+        }
+
+        .hr-sidebar-header {
+            display: none;
+            color: white;
+            font-size: 0.9rem;
+            font-weight: 600;
+            margin-bottom: 10px;
+            width: 100%;
+            padding: 0 4px;
+            white-space: nowrap;
+            opacity: 0;
+            transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1) 0.1s;
+        }
+
+        .hr-sidebar:hover .hr-sidebar-header {
+            display: block;
+            opacity: 1;
+        }
+
+        .hr-sidebar-item {
+            padding: 10px 12px;
+            cursor: pointer;
+            color: rgba(255,255,255,0.8);
+            transition: background 0.25s ease, color 0.25s ease, transform 0.25s ease, border-left-color 0.25s ease;
+            border-left: 3px solid transparent;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+            min-width: 100%;
+            border-radius: 8px;
+            white-space: nowrap;
+            text-decoration: none;
+            overflow: visible;
+            box-sizing: border-box;
+        }
+
+        .hr-sidebar-item:hover {
+            background: rgba(255,255,255,0.14);
+            color: #fff;
+            transform: translateX(2px);
+        }
+
+        .hr-sidebar-item.active {
+            background: rgba(255,255,255,0.22);
+            color: #fff;
+            border-left-color: #fff;
+            font-weight: 600;
+        }
+
+        .hr-sidebar-item i {
+            font-size: 1.25rem;
+            min-width: 24px;
+            text-align: center;
+        }
+
+        .hr-sidebar-item span {
+            opacity: 0;
+            transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1) 0.1s;
+            overflow: visible;
+            white-space: nowrap;
+            display: inline-block;
+            max-width: 100%;
+            width: auto;
+        }
+
+        .hr-sidebar:hover .hr-sidebar-item span {
+            opacity: 1;
+            width: auto;
+            max-width: none;
+        }
+
+        .app-main {
+            flex: 1;
+            margin-left: 70px;
+            transition: margin-left 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .hr-sidebar:hover ~ .app-main {
+            margin-left: 240px;
+        }
+
+        /* Hide sidebar on Info Buddy page */
+        .info-buddy-page .hr-sidebar {
+            display: none !important;
+        }
+
+        .info-buddy-page .app-main {
+            margin-left: 0 !important;
+        }
+
+        @media (max-width: 768px) {
+            .hr-sidebar {
+                width: 58px;
+                padding: 12px 8px;
+            }
+
+            .hr-sidebar:hover {
+                width: 210px;
+            }
+
+            .app-main {
+                margin-left: 58px;
+            }
+
+            .hr-sidebar:hover ~ .app-main {
+                margin-left: 210px;
+            }
+        }
+
+        /* ============================
+           TOOLS HOVER DROPDOWN (TOP RIGHT)
+           ============================ */
+        .nav-tools-dropdown {
+            position: relative;
+        }
+
+        .nav-tools-toggle {
+            cursor: pointer;
+            position: relative;
+        }
+
+        .nav-tools-menu {
+            position: absolute;
+            right: 0;
+            top: calc(100% + 4px);
+            min-width: 220px;
+            background: #ffffff;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+            border-radius: 10px;
+            padding: 8px 0;
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(-8px) scale(0.95);
+            transition: opacity 0.25s cubic-bezier(0.4, 0, 0.2, 1), 
+                        transform 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+                        visibility 0s 0.25s;
+            z-index: 1050;
+            visibility: hidden;
+            border: 1px solid rgba(0,0,0,0.08);
+        }
+        
+        /* Invisible bridge to prevent menu from closing when moving mouse */
+        .nav-tools-menu::before {
+            content: '';
+            position: absolute;
+            top: -4px;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: transparent;
+        }
+
+        /* Show menu on hover over dropdown container */
+        .nav-tools-dropdown:hover .nav-tools-menu {
+            opacity: 1;
+            pointer-events: auto;
+            transform: translateY(0) scale(1);
+            visibility: visible;
+            transition: opacity 0.25s cubic-bezier(0.4, 0, 0.2, 1), 
+                        transform 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+                        visibility 0s 0s;
+        }
+        
+        /* Keep menu open when hovering over menu itself */
+        .nav-tools-menu:hover {
+            opacity: 1 !important;
+            pointer-events: auto !important;
+            transform: translateY(0) scale(1) !important;
+            visibility: visible !important;
+        }
+
+        .nav-tools-menu a {
+            display: flex;
+            align-items: center;
+            padding: 10px 16px;
+            font-size: 0.95rem;
+            color: #212529;
+            text-decoration: none;
+            white-space: nowrap;
+            transition: background-color 0.2s ease, color 0.2s ease;
+            border-radius: 0;
+        }
+
+        .nav-tools-menu a:first-child {
+            border-radius: 10px 10px 0 0;
+        }
+
+        .nav-tools-menu a:last-child {
+            border-radius: 0 0 10px 10px;
+        }
+
+        .nav-tools-menu a:hover {
+            background-color: #f1f3f5;
+            color: var(--primary-blue);
+        }
+
+        .nav-tools-menu a i {
+            font-size: 1.1rem;
+            margin-right: 10px;
+            width: 20px;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
@@ -226,43 +589,46 @@
             </button>
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav ms-auto">
-                    {% if request.endpoint == 'index' %}
-                    <!-- No navigation links on home page -->
-                    {% elif request.endpoint == 'hr_assistant' %}
-                    <li class="nav-item">
-                        <a class="nav-link" href="/resume-evaluator">Recruiter Co-Pilot</a>
+                    <!-- Tools hover switcher (Info Buddy / Pluto) -->
+                    <li class="nav-item nav-tools-dropdown d-none d-lg-block">
+                        <a class="nav-link nav-tools-toggle">
+                            {% if request.endpoint == 'hr_assistant' %}
+                                Info Buddy
+                            {% elif request.endpoint == 'resume_evaluator' %}
+                                Pluto
+                            {% else %}
+                                Info Buddy / Pluto
+                            {% endif %}
+                        </a>
+                        <div class="nav-tools-menu">
+                            <a href="{{ url_for('hr_assistant') }}">
+                                <i class="bi bi-chat-dots me-2"></i> Info Buddy
+                            </a>
+                            <a href="{{ url_for('resume_evaluator') }}">
+                                <i class="bi bi-clipboard-check me-2"></i> Pluto
+                            </a>
+                        </div>
                     </li>
-                    {% elif request.endpoint == 'resume_evaluator' or request.endpoint == 'history' or request.endpoint == 'feedback_history' or request.endpoint == 'job_tracker' or request.endpoint == 'dashboard' %}
-                    <li class="nav-item">
-                        <a class="nav-link" href="/hr-assistant">Info Buddy</a>
-                    </li>
-                    <!-- Hidden: Dashboard link
-                    <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}" 
-                           href="/dashboard"><i class="bi bi-graph-up"></i> Dashboard</a>
-                    </li>
-                    -->
-                    {# History moved to sidebar on Resume Evaluator page #}
-                    <!-- Hidden: Feedback History link
-                    <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == 'feedback_history' %}active{% endif %}" 
-                           href="/feedback_history">Feedback History</a>
-                    </li>
-                    -->
-                    {% endif %}
                     {% if session.user %}
-                    <li class="nav-item dropdown">
-                        <a class="nav-link dropdown-toggle" href="#" id="userDropdown" role="button" data-bs-toggle="dropdown">
+                    <li class="nav-item user-menu-dropdown d-none d-lg-block">
+                        <a class="nav-link user-menu-toggle" href="#" id="userMenuToggle">
                             <i class="bi bi-person-circle"></i> {{ session.user.name or session.user.email }}
                         </a>
-                        <ul class="dropdown-menu dropdown-menu-end">
-                            <li><a class="dropdown-item" href="/dashboard"><i class="bi bi-graph-up"></i> Dashboard</a></li>
-                            {% if session.user.role == 'Admin' %}
-                            <li><a class="dropdown-item" href="/admin"><i class="bi bi-gear"></i> Admin Panel</a></li>
-                            {% endif %}
-                            <li><hr class="dropdown-divider"></li>
-                            <li><a class="dropdown-item" href="/logout"><i class="bi bi-box-arrow-right"></i> Logout</a></li>
-                        </ul>
+                        <div class="user-menu-menu" id="userMenu">
+                            <div class="user-menu-title">Account</div>
+                            <div class="d-grid gap-2">
+                                <button type="button"
+                                        class="btn btn-sm btn-outline-primary"
+                                        onclick="window.location.href='{{ url_for('dashboard') }}'">
+                                    <i class="bi bi-graph-up"></i> Dashboard
+                                </button>
+                                <button type="button"
+                                        class="btn btn-sm btn-outline-danger"
+                                        onclick="window.location.href='{{ url_for('logout') }}'">
+                                    <i class="bi bi-box-arrow-right"></i> Logout
+                                </button>
+                            </div>
+                        </div>
                     </li>
                     {% endif %}
                 </ul>
@@ -271,9 +637,47 @@
     </nav>
 
     <!-- Main Content -->
-    <div class="main-content">
-        <div class="container">
-            {% block content %}{% endblock %}
+    <div class="main-content {% if request.endpoint == 'hr_assistant' %}info-buddy-page{% endif %}">
+        <div class="app-layout">
+            <!-- Global Sidebar (shown on Pluto, History, and Analytics pages) -->
+            {% if request.endpoint == 'resume_evaluator' or request.endpoint == 'history' or request.endpoint == 'dashboard' %}
+            <div class="hr-sidebar" id="mainSidebar">
+                <div class="hr-sidebar-header">
+                    <i class="bi bi-grid-3x3-gap-fill"></i> Modules
+                </div>
+                {% if request.endpoint == 'resume_evaluator' %}
+                <a class="hr-sidebar-item" href="#" data-section="handbook">
+                    <i class="bi bi-book-fill"></i>
+                    <span>Recruiter Handbook</span>
+                </a>
+                <a class="hr-sidebar-item" href="#" data-section="matchmaker">
+                    <i class="bi bi-clipboard-check-fill"></i>
+                    <span>Matchmaker</span>
+                </a>
+                {% else %}
+                <a class="hr-sidebar-item" href="{{ url_for('resume_evaluator') }}?section=handbook">
+                    <i class="bi bi-book-fill"></i>
+                    <span>Recruiter Handbook</span>
+                </a>
+                <a class="hr-sidebar-item" href="{{ url_for('resume_evaluator') }}?section=matchmaker">
+                    <i class="bi bi-clipboard-check-fill"></i>
+                    <span>Matchmaker</span>
+                </a>
+                {% endif %}
+                <a class="hr-sidebar-item {% if request.endpoint == 'history' %}active{% endif %}" href="{{ url_for('history') }}">
+                    <i class="bi bi-clock-history"></i>
+                    <span>History</span>
+                </a>
+                {# Analytics / Dashboard removed from sidebar; available only via user menu #}
+            </div>
+            {% endif %}
+
+            <!-- Main Page Content -->
+            <div class="app-main" id="appMainContent">
+                <div class="container">
+                    {% block content %}{% endblock %}
+                </div>
+            </div>
         </div>
     </div>
 
@@ -292,6 +696,111 @@
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <!-- DOMPurify for sanitizing HTML -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.8/purify.min.js"></script>
+    
+    <!-- Enhanced dropdown menu interaction -->
+    <script>
+    // Tools hover dropdown (Info Buddy / Pluto)
+    document.addEventListener('DOMContentLoaded', function() {
+        const dropdown = document.querySelector('.nav-tools-dropdown');
+        const toggle = document.querySelector('.nav-tools-toggle');
+        const menu = document.querySelector('.nav-tools-menu');
+        const menuLinks = document.querySelectorAll('.nav-tools-menu a');
+        
+        if (!dropdown || !toggle || !menu) return;
+        
+        let isOpen = false;
+        let closeTimeout = null;
+        
+        function openMenu() {
+            if (closeTimeout) {
+                clearTimeout(closeTimeout);
+                closeTimeout = null;
+            }
+            menu.style.opacity = '1';
+            menu.style.pointerEvents = 'auto';
+            menu.style.transform = 'translateY(0) scale(1)';
+            menu.style.visibility = 'visible';
+            isOpen = true;
+        }
+        
+        function closeMenu() {
+            menu.style.opacity = '0';
+            menu.style.pointerEvents = 'none';
+            menu.style.transform = 'translateY(-8px) scale(0.95)';
+            menu.style.visibility = 'hidden';
+            isOpen = false;
+        }
+        
+        toggle.addEventListener('mouseenter', openMenu);
+        menu.addEventListener('mouseenter', openMenu);
+        
+        dropdown.addEventListener('mouseleave', function(e) {
+            const relatedTarget = e.relatedTarget;
+            if (relatedTarget && (menu.contains(relatedTarget) || toggle.contains(relatedTarget))) {
+                return;
+            }
+            closeTimeout = setTimeout(closeMenu, 150);
+        });
+        
+        menuLinks.forEach(function(link) {
+            link.addEventListener('click', closeMenu);
+        });
+        
+        toggle.addEventListener('click', function(e) {
+            e.preventDefault();
+            if (isOpen) {
+                closeMenu();
+            } else {
+                openMenu();
+            }
+        });
+    });
+
+    // User hover menu (Dashboard / Logout)
+    document.addEventListener('DOMContentLoaded', function() {
+        const userDropdown = document.querySelector('.user-menu-dropdown');
+        const userToggle = document.querySelector('.user-menu-toggle');
+        const userMenu = document.querySelector('.user-menu-menu');
+        
+        if (!userDropdown || !userToggle || !userMenu) return;
+        
+        let closeTimeout = null;
+        
+        function openUserMenu() {
+            if (closeTimeout) {
+                clearTimeout(closeTimeout);
+                closeTimeout = null;
+            }
+            userDropdown.classList.add('open');
+        }
+        
+        function closeUserMenu() {
+            userDropdown.classList.remove('open');
+        }
+        
+        userToggle.addEventListener('mouseenter', openUserMenu);
+        userMenu.addEventListener('mouseenter', openUserMenu);
+        
+        userDropdown.addEventListener('mouseleave', function(e) {
+            const relatedTarget = e.relatedTarget;
+            if (relatedTarget && (userMenu.contains(relatedTarget) || userToggle.contains(relatedTarget))) {
+                return;
+            }
+            closeTimeout = setTimeout(closeUserMenu, 150);
+        });
+        
+        // Also allow click to toggle on smaller devices
+        userToggle.addEventListener('click', function(e) {
+            e.preventDefault();
+            if (userDropdown.classList.contains('open')) {
+                closeUserMenu();
+            } else {
+                openUserMenu();
+            }
+        });
+    });
+    </script>
+    
     {% block scripts %}{% endblock %}
 </body>
 </html> 

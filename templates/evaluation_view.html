@@ -10,9 +10,19 @@
                 <h4 class="mb-0">
                     <i class="bi bi-file-earmark-text"></i> Resume Evaluation
                 </h4>
-                <a href="/history" class="btn btn-light btn-sm">
-                    <i class="bi bi-arrow-left"></i> Back to History
-                </a>
+                <div class="d-flex gap-2">
+                    {% if evaluation.resume_path %}
+                    <button class="btn btn-success btn-sm" id="downloadResumeBtn" data-eval-id="{{ evaluation.id }}">
+                        <i class="bi bi-file-earmark-arrow-down"></i> Download Resume
+                    </button>
+                    <button class="btn btn-info btn-sm" id="downloadEvaluationWithResumeBtn" data-eval-id="{{ evaluation.id }}">
+                        <i class="bi bi-file-earmark-pdf"></i> Download with Evaluation
+                    </button>
+                    {% endif %}
+                    <a href="/history" class="btn btn-light btn-sm">
+                        <i class="bi bi-arrow-left"></i> Back to History
+                    </a>
+                </div>
             </div>
         </div>
         <div class="card-body">
@@ -249,5 +259,103 @@
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const evalId = {{ evaluation.id }};
+    const resumePath = {{ evaluation.resume_path|tojson }};
+    console.log("resumePath from backend:", resumePath);
+    const evaluationData = {
+        id: {{ evaluation.id }},
+        filename: {{ evaluation.filename|tojson }},
+        job_title: {{ evaluation.job_title|tojson }},
+        match_percentage: {{ evaluation.match_percentage }},
+        match_factors: {{ evaluation.match_factors|tojson }},
+        profile_summary: {{ evaluation.profile_summary|tojson }},
+        missing_keywords: {{ evaluation.missing_keywords|tojson }},
+        job_stability: {{ evaluation.job_stability|tojson }},
+        career_progression: {{ evaluation.career_progression|tojson }},
+        resume_path: resumePath,
+        candidate_fit_analysis: {{ evaluation.candidate_fit_analysis|tojson if evaluation.candidate_fit_analysis else 'null' }},
+        over_under_qualification: {{ evaluation.over_under_qualification|tojson if evaluation.over_under_qualification else 'null' }},
+        technical_questions: {{ evaluation.technical_questions|tojson if evaluation.technical_questions else '[]' }},
+        nontechnical_questions: {{ evaluation.nontechnical_questions|tojson if evaluation.nontechnical_questions else '[]' }},
+        behavioral_questions: {{ evaluation.behavioral_questions|tojson if evaluation.behavioral_questions else '[]' }},
+        oorwin_job_id: {{ evaluation.oorwin_job_id|tojson if evaluation.oorwin_job_id else 'null' }}
+    };
+
+    // Download Original Resume button
+    const downloadResumeBtn = document.getElementById('downloadResumeBtn');
+    if (downloadResumeBtn) {
+        downloadResumeBtn.addEventListener('click', function() {
+            downloadResumeBtn.disabled = true;
+            downloadResumeBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Downloading...';
+
+            // Direct download link
+            window.location.href = `/api/download-resume/${evalId}`;
+
+            // Re-enable button after a delay
+            setTimeout(() => {
+                downloadResumeBtn.disabled = false;
+                downloadResumeBtn.innerHTML = '<i class="bi bi-file-earmark-arrow-down"></i> Download Resume';
+            }, 2000);
+        });
+    }
+
+    // Download Evaluation with Resume button (evaluation first page, then resume)
+    const downloadEvaluationWithResumeBtn = document.getElementById('downloadEvaluationWithResumeBtn');
+    if (downloadEvaluationWithResumeBtn) {
+        downloadEvaluationWithResumeBtn.addEventListener('click', async function() {
+            if (!resumePath || resumePath === 'null' || resumePath === null || resumePath === '') {
+                alert('Original resume file is no longer available on the server, so it cannot be merged.\n\nYou can still download the evaluation-only PDF.');
+                return;
+            }
+
+            downloadEvaluationWithResumeBtn.disabled = true;
+            downloadEvaluationWithResumeBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Generating PDF...';
+
+            try {
+                const response = await fetch('/api/download-evaluation-with-resume', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        evaluation_id: evalId,
+                        evaluation_data: evaluationData
+                    })
+                });
+
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.style.display = 'none';
+                    a.href = url;
+                    const filename = evaluationData.filename || 'Resume_With_Evaluation';
+                    const filename_base = filename.replace(/\.[^/.]+$/, ""); // Remove extension
+                    const timestamp = new Date().getTime();
+                    a.download = `Resume_With_Evaluation_${filename_base}_${timestamp}.pdf`;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+                } else {
+                    const data = await response.json();
+                    throw new Error(data.message || 'Failed to generate merged PDF');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Failed to download merged PDF: ' + error.message);
+            } finally {
+                downloadEvaluationWithResumeBtn.disabled = false;
+                downloadEvaluationWithResumeBtn.innerHTML = '<i class="bi bi-file-earmark-pdf"></i> Download with Evaluation';
+            }
+        });
+    }
+});
+</script>
 {% endblock %}
 
