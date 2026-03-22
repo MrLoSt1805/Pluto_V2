@@ -8,6 +8,14 @@ document.addEventListener('DOMContentLoaded', function() {
     let currentHandbookContent = ''; // Store current handbook content for PDF generation
     let currentHandbookData = null; // Store handbook form data for auto-filling Match Maker
     let currentEvaluationData = null; // Store current evaluation data for PDF generation
+
+    /** Enable Matchmaker download buttons once evaluation DB id exists */
+    function enableEvaluationDownloadButtons() {
+        ['downloadEvaluationWithResume', 'downloadResumeUploadedBtn'].forEach(function (btnId) {
+            const el = document.getElementById(btnId);
+            if (el) el.disabled = false;
+        });
+    }
     
     // Load JobID suggestions on page load
     loadJobIdSuggestions();
@@ -64,6 +72,11 @@ document.addEventListener('DOMContentLoaded', function() {
         e.preventDefault();
         submitBtn.disabled = true;
         submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Evaluating...';
+
+        const _dr = document.getElementById('downloadResumeUploadedBtn');
+        const _dm = document.getElementById('downloadEvaluationWithResume');
+        if (_dr) _dr.disabled = true;
+        if (_dm) _dm.disabled = true;
         
         // Ensure result div is visible and form is ready
         resultDiv.style.display = 'none'; // Hide initially, will show when results arrive
@@ -197,10 +210,11 @@ document.addEventListener('DOMContentLoaded', function() {
                                 console.log("Original resume extension:", window.resumeOriginalExt);
                                 console.log("Can merge resume:", window.canMergeResume);
                                 
-                                // Update the \"Download with Resume\" button appearance and tooltip based on merge capability
+                                // Update Download with Evaluation button appearance based on merge capability (PDF only)
                                 const mergeBtn = document.getElementById('downloadEvaluationWithResume');
                                 const mergeWarning = document.getElementById('downloadWithResumeWarning');
                                 if (mergeBtn) {
+                                    mergeBtn.innerHTML = '<i class="bi bi-file-earmark-pdf"></i> Download with Evaluation';
                                     if (!window.canMergeResume) {
                                         // Make button slightly translucent and non-clickable looking
                                         mergeBtn.style.opacity = '0.6';
@@ -208,7 +222,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                         // Show professional inline warning below the button
                                         if (mergeWarning) {
                                             mergeWarning.textContent =
-                                                'The uploaded resume is a DOCX, not a PDF. Merging is only supported for PDF resumes. Please upload a PDF resume if you want a merged Resume + Evaluation PDF.';
+                                                'The uploaded resume is a DOCX, not a PDF. Download with Evaluation (merged PDF) only works when the resume is a PDF.';
                                             mergeWarning.classList.remove('d-none');
                                         }
                                     } else {
@@ -238,6 +252,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                         currentEvaluationData.id = window.currentEvaluationId;
                                         console.log("✅ [EARLY] Updated currentEvaluationData.id to:", window.currentEvaluationId);
                                     }
+                                    enableEvaluationDownloadButtons();
                                 } else {
                                     console.warn("⚠️ [EARLY] basic_results did not include db_id");
                                 }
@@ -344,16 +359,12 @@ document.addEventListener('DOMContentLoaded', function() {
                                     console.log("✅ Using evaluation ID for feedback check:", window.currentEvaluationId);
                                     checkEvaluationFeedbackExists(window.currentEvaluationId);
                                     
-                                    // Enable the download button now that we have the ID
-                                    const downloadBtn = document.getElementById('downloadEvaluationWithResumeBtn');
-                                    if (downloadBtn) {
-                                        downloadBtn.disabled = false;
-                                        console.log('✅ Download with Resume button enabled');
-                                    }
+                                    // Enable download buttons now that we have the DB ID
+                                    enableEvaluationDownloadButtons();
                                 } else {
                                     console.error('❌ ERROR: complete event did not include db_id!', eventData);
                                     console.error('Complete event keys:', Object.keys(eventData));
-                                    alert('Warning: Evaluation completed but ID not received. Download with Resume may not work. Please check browser console (F12) for details.');
+                                    alert('Warning: Evaluation completed but ID not received. Downloads may not work. Please check browser console (F12) for details.');
                                 }
                                 
                                 // Do NOT use eval_id (UUID) anywhere after this point
@@ -776,57 +787,38 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Download Evaluation PDF button (standalone)
-    const downloadEvaluationPDFBtn = document.getElementById('downloadEvaluationPDF');
-    if (downloadEvaluationPDFBtn) {
-        downloadEvaluationPDFBtn.addEventListener('click', async function() {
-            if (!currentEvaluationData) {
-                alert('No evaluation data to download.');
+    // Download original uploaded resume only (direct file from server)
+    const downloadResumeUploadedBtn = document.getElementById('downloadResumeUploadedBtn');
+    if (downloadResumeUploadedBtn) {
+        downloadResumeUploadedBtn.addEventListener('click', function () {
+            let evalIdToUse = window.currentEvaluationId;
+            const evalIdInput = document.getElementById('evaluation-id');
+            const evalIdFromInput = evalIdInput ? evalIdInput.value : null;
+            if (!evalIdToUse) evalIdToUse = evalIdFromInput;
+            if (evalIdToUse && typeof evalIdToUse === 'string' && evalIdToUse.includes('-')) {
+                evalIdToUse = null;
+            }
+            if (!evalIdToUse && currentEvaluationData?.id) {
+                const idValue = currentEvaluationData.id;
+                if (typeof idValue === 'number' || (typeof idValue === 'string' && /^\d+$/.test(idValue) && !idValue.includes('-'))) {
+                    evalIdToUse = idValue;
+                }
+            }
+            if (!evalIdToUse) {
+                alert('Evaluation ID not available yet. Please wait for the evaluation to finish saving, then try again.');
                 return;
             }
-
-            downloadEvaluationPDFBtn.disabled = true;
-            downloadEvaluationPDFBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Generating PDF...';
-
-            try {
-                const response = await fetch('/api/download-evaluation-pdf', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        evaluation_data: currentEvaluationData
-                    })
-                });
-
-                if (response.ok) {
-                    const blob = await response.blob();
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.style.display = 'none';
-                    a.href = url;
-                    const filename = currentEvaluationData.filename || 'Resume_Evaluation';
-                    const timestamp = new Date().getTime();
-                    a.download = `Resume_Evaluation_${filename}_${timestamp}.pdf`;
-                    document.body.appendChild(a);
-                    a.click();
-                    window.URL.revokeObjectURL(url);
-                    document.body.removeChild(a);
-                } else {
-                    const data = await response.json();
-                    throw new Error(data.message || 'Failed to generate PDF');
-                }
-            } catch (error) {
-                console.error('Error:', error);
-                alert('Failed to download PDF: ' + error.message);
-            } finally {
-                downloadEvaluationPDFBtn.disabled = false;
-                downloadEvaluationPDFBtn.innerHTML = '<i class="bi bi-download"></i> Download PDF';
-            }
+            downloadResumeUploadedBtn.disabled = true;
+            downloadResumeUploadedBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Downloading...';
+            window.location.href = '/api/download-resume/' + encodeURIComponent(evalIdToUse);
+            setTimeout(function () {
+                downloadResumeUploadedBtn.disabled = false;
+                downloadResumeUploadedBtn.innerHTML = '<i class="bi bi-file-earmark-arrow-down"></i> Download Resume';
+            }, 2000);
         });
     }
 
-    // Download Evaluation with Resume PDF button (merged)
+    // Download concise evaluation PDF + resume (merged)
     const downloadEvaluationWithResumeBtn = document.getElementById('downloadEvaluationWithResume');
     if (downloadEvaluationWithResumeBtn) {
         downloadEvaluationWithResumeBtn.addEventListener('click', async function() {
@@ -844,9 +836,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 // If merging is not allowed (e.g., DOCX upload), show message and exit early
                 if (window.canMergeResume === false) {
-                    alert("Cannot merge: the uploaded resume is a DOCX, not a PDF. Merging is only supported for PDF resumes.\n\nPlease upload a PDF resume if you want to download a merged Resume + Evaluation PDF.");
+                    alert("Cannot merge: the uploaded resume is a DOCX, not a PDF. Download with Evaluation only works when the resume is a PDF.\n\nPlease upload a PDF resume for a merged PDF.");
                     downloadEvaluationWithResumeBtn.disabled = false;
-                    downloadEvaluationWithResumeBtn.innerHTML = 'Download with Resume';
+                    downloadEvaluationWithResumeBtn.innerHTML = '<i class="bi bi-file-earmark-pdf"></i> Download with Evaluation';
                     return;
                 }
 
@@ -884,7 +876,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     console.error("❌ [MERGE DEBUG] currentEvaluationData:", currentEvaluationData);
                     alert("Error: Evaluation ID not available. Please wait for evaluation to complete and try again.\n\nIf this persists, refresh the page and run a new evaluation.\n\nCheck browser console (F12) for debug details.");
                     downloadEvaluationWithResumeBtn.disabled = false;
-                    downloadEvaluationWithResumeBtn.innerHTML = 'Download with Resume';
+                    downloadEvaluationWithResumeBtn.innerHTML = '<i class="bi bi-file-earmark-pdf"></i> Download with Evaluation';
                     return;
                 }
                 
@@ -898,7 +890,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     console.error("ERROR: evalIdToUse is invalid:", evalIdToUse);
                     alert("Error: Evaluation ID not available. Please wait for evaluation to complete and try again.\n\nIf this persists, refresh the page and run a new evaluation.");
                     downloadEvaluationWithResumeBtn.disabled = false;
-                    downloadEvaluationWithResumeBtn.innerHTML = 'Download with Resume';
+                    downloadEvaluationWithResumeBtn.innerHTML = '<i class="bi bi-file-earmark-pdf"></i> Download with Evaluation';
                     return;
                 }
                 
@@ -917,7 +909,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (!resumePathToSend) {
                     alert("Resume path missing. Please refresh evaluation.\n\nDebug info: Check browser console (F12) for details.");
                     downloadEvaluationWithResumeBtn.disabled = false;
-                    downloadEvaluationWithResumeBtn.innerHTML = 'Download with Resume';
+                    downloadEvaluationWithResumeBtn.innerHTML = '<i class="bi bi-file-earmark-pdf"></i> Download with Evaluation';
                     return;
                 }
 
@@ -956,7 +948,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 alert('Failed to download merged PDF: ' + error.message);
             } finally {
                 downloadEvaluationWithResumeBtn.disabled = false;
-                downloadEvaluationWithResumeBtn.innerHTML = '<i class="bi bi-file-earmark-pdf"></i> Download with Resume';
+                downloadEvaluationWithResumeBtn.innerHTML = '<i class="bi bi-file-earmark-pdf"></i> Download with Evaluation';
             }
         });
     }
@@ -1010,15 +1002,43 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    /**
+     * Show the handbook *generation* form and hide loading/result/error.
+     * Used by "Generate New" and when user clicks Recruiter Handbook in the sidebar
+     * (so sidebar always opens the create flow, not the last viewed handbook).
+     */
+    function resetHandbookSectionToForm() {
+        const inputEl = document.getElementById('handbook-input-section');
+        const loadingEl = document.getElementById('handbook-loading');
+        const resultEl = document.getElementById('handbook-result-section');
+        const errorEl = document.getElementById('handbook-error');
+        const contentEl = document.getElementById('handbook-content');
+        if (inputEl) inputEl.style.display = 'block';
+        if (loadingEl) loadingEl.style.display = 'none';
+        if (resultEl) resultEl.style.display = 'none';
+        if (errorEl) errorEl.style.display = 'none';
+        if (contentEl) contentEl.innerHTML = '';
+        currentHandbookContent = '';
+        currentHandbookData = null;
+        if (handbookForm) {
+            handbookForm.reset();
+        }
+        // Leaving "view from history" mode — avoid confusion if URL still has view_handbook
+        try {
+            const u = new URL(window.location.href);
+            if (u.searchParams.has('view_handbook')) {
+                u.searchParams.delete('view_handbook');
+                window.history.replaceState({}, '', u.toString());
+            }
+        } catch (e) { /* ignore */ }
+    }
+
+    window.resetHandbookSectionToForm = resetHandbookSectionToForm;
+
     // Reset button to generate new handbook
     if (resetHandbookBtn) {
         resetHandbookBtn.addEventListener('click', function() {
-            document.getElementById('handbook-result-section').style.display = 'none';
-            document.getElementById('handbook-input-section').style.display = 'block';
-            document.getElementById('handbook-error').style.display = 'none';
-            currentHandbookContent = '';
-            currentHandbookData = null;
-            handbookForm.reset();
+            resetHandbookSectionToForm();
         });
     }
     
@@ -1034,11 +1054,50 @@ document.addEventListener('DOMContentLoaded', function() {
         if (viewHandbook) {
             const handbookData = sessionStorage.getItem('viewHandbookData');
             console.log('Handbook data from storage:', handbookData ? 'Found' : 'Not found');
-            if (handbookData) {
-                const handbook = JSON.parse(handbookData);
+            const stripHandbookQuery = () => {
+                try {
+                    const u = new URL(window.location.href);
+                    u.searchParams.delete('view_handbook');
+                    window.history.replaceState({}, '', u.toString());
+                } catch (e) { /* ignore */ }
+            };
+            const showHandbook = (handbook) => {
                 console.log('Displaying stored handbook');
                 displayStoredHandbook(handbook);
-                sessionStorage.removeItem('viewHandbookData'); // Clean up
+                try { sessionStorage.removeItem('viewHandbookData'); } catch (e) { /* ignore */ }
+                // Must defer: resume-evaluator's DOMContentLoaded runs before index2.html's listener.
+                // Stripping ?view_handbook= synchronously made index2 think we were on a plain load,
+                // so its 100ms timeout forced Matchmaker and hid the handbook from History.
+                setTimeout(() => stripHandbookQuery(), 0);
+            };
+            if (handbookData) {
+                try {
+                    showHandbook(JSON.parse(handbookData));
+                } catch (e) {
+                    console.error('Failed to parse viewHandbookData', e);
+                    fetch(`/api/handbook/${encodeURIComponent(viewHandbook)}`)
+                        .then(r => r.json())
+                        .then(data => {
+                            if (data.success && data.handbook) {
+                                showHandbook(data.handbook);
+                            } else {
+                                alert(data.message || 'Could not load handbook.');
+                            }
+                        })
+                        .catch(err => alert('Could not load handbook: ' + err.message));
+                }
+            } else {
+                // New tab / storage cleared — load by id from API
+                fetch(`/api/handbook/${encodeURIComponent(viewHandbook)}`)
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.success && data.handbook) {
+                            showHandbook(data.handbook);
+                        } else {
+                            alert(data.message || 'Could not load handbook.');
+                        }
+                    })
+                    .catch(err => alert('Could not load handbook: ' + err.message));
             }
         } else if (viewEvaluation) {
             const evaluationData = sessionStorage.getItem('viewEvaluationData');
@@ -1078,13 +1137,13 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                     
                     // Switch to matchmaker section if on Pluto page
-                    const matchmakerSidebarItem = document.querySelector('.sidebar-item[data-section="matchmaker"]');
+                    const matchmakerSidebarItem = document.querySelector('.hr-sidebar-item[data-section="matchmaker"]');
                     const matchmakerSection = document.getElementById('matchmaker-section');
                     const handbookSection = document.getElementById('handbook-section');
                     
                     if (matchmakerSidebarItem && matchmakerSection) {
                         // Remove active from all sidebar items
-                        document.querySelectorAll('.sidebar-item').forEach(item => {
+                        document.querySelectorAll('.hr-sidebar-item').forEach(item => {
                             item.classList.remove('active');
                         });
                         
@@ -1108,71 +1167,64 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Display a stored handbook (from history)
     function displayStoredHandbook(handbook) {
-        // Function to try switching to handbook with retries
-        function switchToHandbook(retries = 0) {
-            const handbookSidebarItem = document.querySelector('.sidebar-item[data-section="handbook"]');
-            console.log('Attempt', retries + 1, '- Handbook sidebar item:', handbookSidebarItem ? 'Found' : 'Not found');
-            
-            if (handbookSidebarItem) {
-                // Remove active from all sidebar items
-                document.querySelectorAll('.sidebar-item').forEach(item => {
-                    item.classList.remove('active');
-                });
-                
-                // Add active to handbook
-                handbookSidebarItem.classList.add('active');
-                
-                // Show handbook section, hide matchmaker section
-                const handbookSection = document.getElementById('handbook-section');
-                const matchmakerSection = document.getElementById('matchmaker-section');
-                
-                if (handbookSection) handbookSection.style.display = 'block';
-                if (matchmakerSection) matchmakerSection.style.display = 'none';
-                
-                console.log('Switched to Handbook section');
-                return true;
-            } else if (retries < 5) {
-                // Retry after a short delay
-                setTimeout(() => switchToHandbook(retries + 1), 100);
-                return false;
-            }
-            return false;
-        }
-        
-        // Try to switch to handbook
-        switchToHandbook();
-        
-        // Wait for section to be visible before displaying content
-        setTimeout(() => {
-            // Hide input section, show result section
-            document.getElementById('handbook-input-section').style.display = 'none';
-            document.getElementById('handbook-loading').style.display = 'none';
-            document.getElementById('handbook-error').style.display = 'none';
-            document.getElementById('handbook-result-section').style.display = 'block';
-            
-            // Render the handbook content using marked.js
+        /** Show result view and render markdown as soon as the section is visible (no artificial delay). */
+        function applyHandbookContent() {
+            const inputEl = document.getElementById('handbook-input-section');
+            const loadingEl = document.getElementById('handbook-loading');
+            const errorEl = document.getElementById('handbook-error');
+            const resultEl = document.getElementById('handbook-result-section');
+            if (inputEl) inputEl.style.display = 'none';
+            if (loadingEl) loadingEl.style.display = 'none';
+            if (errorEl) errorEl.style.display = 'none';
+            if (resultEl) resultEl.style.display = 'block';
+
             const handbookContentDiv = document.getElementById('handbook-content');
-                if (handbook.markdown_content) {
+            if (handbookContentDiv && handbook.markdown_content) {
                 const rawHtml = marked.parse(handbook.markdown_content);
                 handbookContentDiv.innerHTML = DOMPurify.sanitize(rawHtml);
-                // Post-process formatting for clearer hierarchy
                 enhanceHandbookFormatting();
-                
-                // Add copy buttons to Boolean search samples
                 addCopyButtonsToBooleanSamples();
             }
-            
-            // Store for PDF generation
+
             currentHandbookContent = handbook.markdown_content;
             currentHandbookData = {
                 jobId: handbook.oorwin_job_id || '',
                 jobTitle: handbook.job_title || '',
                 jobDescription: handbook.job_description || ''
             };
-            
-            // Scroll to top
+
             window.scrollTo({ top: 0, behavior: 'smooth' });
-        }, 300); // Wait for sidebar animation
+        }
+
+        // Function to try switching to handbook with retries
+        function switchToHandbook(retries = 0) {
+            const handbookSidebarItem = document.querySelector('.hr-sidebar-item[data-section="handbook"]');
+            console.log('Attempt', retries + 1, '- Handbook sidebar item:', handbookSidebarItem ? 'Found' : 'Not found');
+
+            if (handbookSidebarItem) {
+                document.querySelectorAll('.hr-sidebar-item').forEach(item => {
+                    item.classList.remove('active');
+                });
+                handbookSidebarItem.classList.add('active');
+
+                const handbookSection = document.getElementById('handbook-section');
+                const matchmakerSection = document.getElementById('matchmaker-section');
+
+                if (handbookSection) handbookSection.style.display = 'block';
+                if (matchmakerSection) matchmakerSection.style.display = 'none';
+
+                console.log('Switched to Handbook section');
+                applyHandbookContent();
+                return true;
+            }
+            if (retries < 5) {
+                setTimeout(() => switchToHandbook(retries + 1), 100);
+                return false;
+            }
+            return false;
+        }
+
+        switchToHandbook();
     }
     
     // Display a stored evaluation (from history)
@@ -1181,12 +1233,12 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Function to try switching to matchmaker with retries
         function switchToMatchMaker(retries = 0) {
-            const matchmakerSidebarItem = document.querySelector('.sidebar-item[data-section="matchmaker"]');
+            const matchmakerSidebarItem = document.querySelector('.hr-sidebar-item[data-section="matchmaker"]');
             console.log('Attempt', retries + 1, '- Matchmaker sidebar item:', matchmakerSidebarItem ? 'Found' : 'Not found');
             
             if (matchmakerSidebarItem) {
                 // Remove active from all sidebar items
-                document.querySelectorAll('.sidebar-item').forEach(item => {
+                document.querySelectorAll('.hr-sidebar-item').forEach(item => {
                     item.classList.remove('active');
                 });
                 
@@ -1288,14 +1340,14 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         
         // Try to switch to Match Maker section on the same page first
-        const matchmakerSidebarItem = document.querySelector('.sidebar-item[data-section="matchmaker"]');
+        const matchmakerSidebarItem = document.querySelector('.hr-sidebar-item[data-section="matchmaker"]');
         const handbookSection = document.getElementById('handbook-section');
         const matchmakerSection = document.getElementById('matchmaker-section');
         
         if (matchmakerSidebarItem && matchmakerSection && handbookSection) {
             // We're on the Pluto page with sections - switch sections
             // Remove active from all sidebar items
-            document.querySelectorAll('.sidebar-item').forEach(item => {
+            document.querySelectorAll('.hr-sidebar-item').forEach(item => {
                 item.classList.remove('active');
             });
             

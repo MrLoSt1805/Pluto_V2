@@ -309,7 +309,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (downloadEvaluationWithResumeBtn) {
         downloadEvaluationWithResumeBtn.addEventListener('click', async function() {
             if (!resumePath || resumePath === 'null' || resumePath === null || resumePath === '') {
-                alert('Original resume file is no longer available on the server, so it cannot be merged.\n\nYou can still download the evaluation-only PDF.');
+                alert('Original resume file is no longer available on the server, so it cannot be merged with the evaluation.');
                 return;
             }
 

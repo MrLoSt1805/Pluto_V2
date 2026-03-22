@@ -1,9 +1,21 @@
-﻿{% extends 'base.html' %}
+{% extends 'base.html' %}
 
 {% block title %}HR Tools - Pluto & Recruiter Handbook{% endblock %}
 
 {% block content %}
 <style>
+    /* Darker, high-contrast "View in History" on generated handbook card */
+    .handbook-history-btn {
+        background-color: #0d47a1 !important;
+        border-color: #0a3d91 !important;
+        color: #fff !important;
+        font-weight: 600;
+    }
+    .handbook-history-btn:hover {
+        background-color: #0a3d91 !important;
+        border-color: #083175 !important;
+        color: #fff !important;
+    }
     /* Handbook Star Rating Styles */
     .handbook-star-rating {
         display: flex;
@@ -72,6 +84,12 @@
                                             <button type="submit" class="btn btn-primary btn-lg" id="generateHandbookBtn">
                                                 <i class="bi bi-book"></i> Generate Recruiter Handbook
                                             </button>
+                                            <p class="small text-muted mt-3 mb-0">
+                                                <i class="bi bi-info-circle"></i>
+                                                To <strong>open this handbook later</strong>, go to
+                                                <a href="{{ url_for('history') }}"><strong>History</strong></a>
+                                                in the sidebar and click the <strong>blue job title</strong> for that Job ID.
+                                            </p>
                                         </div>
                                     </form>
                             </div>
@@ -94,6 +112,9 @@
                                 <div class="card-header d-flex justify-content-between align-items-center">
                                     <h4 class="mb-0">Generated Recruiter Handbook</h4>
                                     <div>
+                                        <a href="{{ url_for('history') }}" class="btn btn-sm me-2 handbook-history-btn" title="Find your job and click the blue job title to reopen this handbook">
+                                            <i class="bi bi-clock-history"></i> View in History
+                                        </a>
                                         <button class="btn btn-success btn-sm me-2" id="downloadHandbookPDF">
                                             <i class="bi bi-download"></i> Download PDF
                                         </button>
@@ -238,11 +259,13 @@
         <div class="card-header d-flex justify-content-between align-items-center">
             <h4 class="mb-0"><i class="bi bi-clipboard-data"></i> Evaluation Results</h4>
             <div class="text-end">
-                <button class="btn btn-success btn-sm me-2" id="downloadEvaluationPDF">
-                    <i class="bi bi-download"></i> Download PDF
+                <button type="button" class="btn btn-success btn-sm me-2" id="downloadResumeUploadedBtn" disabled
+                        title="Available after evaluation is saved">
+                    <i class="bi bi-file-earmark-arrow-down"></i> Download Resume
                 </button>
-                <button class="btn btn-primary btn-sm" id="downloadEvaluationWithResume">
-                    <i class="bi bi-file-earmark-pdf"></i> Download with Resume
+                <button type="button" class="btn btn-primary btn-sm" id="downloadEvaluationWithResume" disabled
+                        title="Available after evaluation is saved">
+                    <i class="bi bi-file-earmark-pdf"></i> Download with Evaluation
                 </button>
                 <!-- Inline warning area shown when resume is DOCX -->
                 <div id="downloadWithResumeWarning"
@@ -773,6 +796,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Show selected section
                 if (section === 'handbook' && handbookSection) {
                     handbookSection.style.display = 'block';
+                    // Always show the create-handbook form (not the last generated result).
+                    // Saved handbooks are opened from History; sidebar = new handbook flow.
+                    try {
+                        if (typeof window.resetHandbookSectionToForm === 'function') {
+                            window.resetHandbookSectionToForm();
+                        }
+                    } catch (err) {
+                        console.error('Error resetting Handbook view:', err);
+                    }
                 } else if (section === 'matchmaker' && matchmakerSection) {
                     matchmakerSection.style.display = 'block';
 
@@ -819,30 +851,38 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
     
-    // Set default active section (Matchmaker) on page load
-    setTimeout(() => {
-        if (matchmakerSection) {
-            // Ensure matchmaker section is visible by default
-            matchmakerSection.style.display = 'block';
-            if (handbookSection) {
-                handbookSection.style.display = 'none';
-            }
-            
-            // Set Matchmaker as active in sidebar
-            const matchmakerItem = document.querySelector('.hr-sidebar-item[data-section="matchmaker"]');
-            const handbookItem = document.querySelector('.hr-sidebar-item[data-section="handbook"]');
-            if (matchmakerItem) {
-                matchmakerItem.classList.add('active');
-            }
-            if (handbookItem) {
-                handbookItem.classList.remove('active');
-            }
-        }
-    }, 100);
-    
-    // Handle URL parameter for auto-switching sections
+    // Read URL early: default Matchmaker-on-load must not override handbook-from-history or ?section=handbook
     const urlParams = new URLSearchParams(window.location.search);
     const sectionParam = urlParams.get('section');
+    const skipDefaultMatchmaker =
+        sectionParam === 'handbook' ||
+        urlParams.has('view_handbook') ||
+        urlParams.has('view_evaluation');
+
+    // Set default active section (Matchmaker) on page load — only when not opening a stored view / handbook section
+    if (!skipDefaultMatchmaker) {
+        setTimeout(() => {
+            if (matchmakerSection) {
+                // Ensure matchmaker section is visible by default
+                matchmakerSection.style.display = 'block';
+                if (handbookSection) {
+                    handbookSection.style.display = 'none';
+                }
+
+                // Set Matchmaker as active in sidebar
+                const matchmakerItem = document.querySelector('.hr-sidebar-item[data-section="matchmaker"]');
+                const handbookItem = document.querySelector('.hr-sidebar-item[data-section="handbook"]');
+                if (matchmakerItem) {
+                    matchmakerItem.classList.add('active');
+                }
+                if (handbookItem) {
+                    handbookItem.classList.remove('active');
+                }
+            }
+        }, 100);
+    }
+
+    // Handle URL parameter for auto-switching sections
     
     if (sectionParam === 'handbook') {
         // Switch to Handbook section

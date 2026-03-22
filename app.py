@@ -55,6 +55,8 @@ from concurrent.futures import ThreadPoolExecutor
 from asgiref.wsgi import WsgiToAsgi
 import time
 from io import BytesIO
+from evaluation_pdf import build_evaluation_pdf_bytes
+from handbook_pdf import build_handbook_pdf_bytes
 from reportlab.lib.pagesizes import letter, A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
@@ -2199,13 +2201,35 @@ def view_evaluation(eval_id):
                     logging.warning(f"[VIEW] ⚠️ Could not convert DOCX to PDF, merging won't work: {resume_path_from_db}")
                     # Keep DOCX path but merging will fail (user will see error)
         
+        # Normalize match_percentage to an integer (handle NULL/None values safely)
+        try:
+            match_percentage_value = int(row[4]) if row[4] is not None else 0
+        except (ValueError, TypeError):
+            match_percentage_value = 0
+
+        # Normalize match_factors values to integers (avoid None/strings in template comparisons)
+        raw_match_factors = {}
+        if row[5]:
+            try:
+                raw_match_factors = json.loads(row[5])
+            except Exception as jf:
+                logging.warning(f"Failed to parse match_factors for evaluation {row[0]}: {jf}")
+                raw_match_factors = {}
+
+        normalized_match_factors = {}
+        for factor, value in raw_match_factors.items():
+            try:
+                normalized_match_factors[factor] = int(value) if value is not None else 0
+            except (ValueError, TypeError):
+                normalized_match_factors[factor] = 0
+
         evaluation = {
             'id': row[0],
             'filename': row[1],
             'job_title': row[2],
             'job_description': row[3],
-            'match_percentage': row[4],
-            'match_factors': json.loads(row[5]) if row[5] else {},
+            'match_percentage': match_percentage_value,
+            'match_factors': normalized_match_factors,
             'profile_summary': row[6],
             'missing_keywords': json.loads(row[7]) if row[7] else [],
             'job_stability': json.loads(row[8]) if row[8] else {},
@@ -7086,178 +7110,9 @@ def download_evaluation_pdf():
                 'message': 'No evaluation data to download'
             }), 400
         
-        logging.info("Generating PDF from evaluation data...")
-        
-        # Create PDF in memory
-        buffer = BytesIO()
-        doc = SimpleDocTemplate(
-            buffer,
-            pagesize=A4,
-            rightMargin=50,
-            leftMargin=50,
-            topMargin=72,
-            bottomMargin=18,
-        )
-        
-        # Container for the 'Flowable' objects
-        elements = []
-        
-        # Define styles
-        styles = getSampleStyleSheet()
-        
-        title_style = ParagraphStyle(
-            'CustomTitle',
-            parent=styles['Heading1'],
-            fontSize=24,
-            textColor='#2c3e50',
-            spaceAfter=30,
-            alignment=TA_CENTER
-        )
-        
-        heading1_style = ParagraphStyle(
-            'CustomHeading1',
-            parent=styles['Heading1'],
-            fontSize=18,
-            textColor='#2c3e50',
-            spaceAfter=12,
-            spaceBefore=12
-        )
-        
-        heading2_style = ParagraphStyle(
-            'CustomHeading2',
-            parent=styles['Heading2'],
-            fontSize=14,
-            textColor='#34495e',
-            spaceAfter=10,
-            spaceBefore=10
-        )
-        
-        body_style = ParagraphStyle(
-            'CustomBody',
-            parent=styles['BodyText'],
-            fontSize=11,
-            alignment=TA_LEFT,
-            spaceAfter=12
-        )
-        
-        # Title
-        job_title = evaluation_data.get('job_title', 'Resume Evaluation')
+        logging.info("Generating PDF from evaluation data (PeopleLogic layout)...")
+        pdf_data = build_evaluation_pdf_bytes(evaluation_data)
         filename = evaluation_data.get('filename', 'Unknown')
-        elements.append(Paragraph(f"Resume Evaluation Report", title_style))
-        elements.append(Spacer(1, 0.2*inch))
-        
-        # Job Information
-        elements.append(Paragraph(f"<b>Job Title:</b> {job_title}", body_style))
-        elements.append(Paragraph(f"<b>Candidate Resume:</b> {filename}", body_style))
-        if evaluation_data.get('oorwin_job_id'):
-            elements.append(Paragraph(f"<b>Job ID:</b> {evaluation_data.get('oorwin_job_id')}", body_style))
-        elements.append(Spacer(1, 0.3*inch))
-        
-        # Match Score
-        match_percentage = evaluation_data.get('match_percentage', 0)
-        match_percentage_str = evaluation_data.get('match_percentage_str', f"{match_percentage}%")
-        elements.append(Paragraph(f"<b>Match Score: {match_percentage_str}</b>", heading1_style))
-        elements.append(Spacer(1, 0.2*inch))
-        
-        # Match Factors
-        match_factors = evaluation_data.get('match_factors', {})
-        if match_factors:
-            elements.append(Paragraph("<b>Match Factors Breakdown:</b>", heading2_style))
-            for factor_name, factor_value in match_factors.items():
-                if factor_value is not None:
-                    elements.append(Paragraph(f"• {factor_name}: {factor_value}%", body_style))
-            elements.append(Spacer(1, 0.2*inch))
-        
-        # Profile Summary
-        profile_summary = evaluation_data.get('profile_summary', '')
-        if profile_summary:
-            elements.append(Paragraph("<b>Profile Summary:</b>", heading2_style))
-            elements.append(Paragraph(profile_summary, body_style))
-            elements.append(Spacer(1, 0.2*inch))
-        
-        # Missing Keywords
-        missing_keywords = evaluation_data.get('missing_keywords', [])
-        if missing_keywords and len(missing_keywords) > 0:
-            elements.append(Paragraph("<b>Missing Keywords:</b>", heading2_style))
-            keywords_text = ", ".join(missing_keywords) if isinstance(missing_keywords, list) else str(missing_keywords)
-            elements.append(Paragraph(keywords_text, body_style))
-            elements.append(Spacer(1, 0.2*inch))
-        
-        # Job Stability
-        job_stability = evaluation_data.get('job_stability', {})
-        if job_stability:
-            elements.append(PageBreak())
-            elements.append(Paragraph("<b>Job Stability Analysis</b>", heading1_style))
-            if job_stability.get('StabilityScore'):
-                elements.append(Paragraph(f"Stability Score: {job_stability.get('StabilityScore')}%", body_style))
-            if job_stability.get('RiskLevel'):
-                elements.append(Paragraph(f"Risk Level: {job_stability.get('RiskLevel')}", body_style))
-            if job_stability.get('AverageJobTenure'):
-                elements.append(Paragraph(f"Average Job Tenure: {job_stability.get('AverageJobTenure')}", body_style))
-            if job_stability.get('JobCount'):
-                elements.append(Paragraph(f"Job Count: {job_stability.get('JobCount')}", body_style))
-            if job_stability.get('ReasoningExplanation'):
-                elements.append(Spacer(1, 0.1*inch))
-                elements.append(Paragraph(job_stability.get('ReasoningExplanation'), body_style))
-            elements.append(Spacer(1, 0.2*inch))
-        
-        # Career Progression
-        career_progression = evaluation_data.get('career_progression', {})
-        if career_progression:
-            elements.append(Paragraph("<b>Career Progression Analysis</b>", heading1_style))
-            if career_progression.get('progression_score'):
-                elements.append(Paragraph(f"Progression Score: {career_progression.get('progression_score')}", body_style))
-            if career_progression.get('key_observations'):
-                elements.append(Spacer(1, 0.1*inch))
-                elements.append(Paragraph("<b>Key Observations:</b>", heading2_style))
-                for obs in career_progression.get('key_observations', []):
-                    elements.append(Paragraph(f"• {obs}", body_style))
-            elements.append(Spacer(1, 0.2*inch))
-        
-        # Over/Under Qualification
-        over_under = evaluation_data.get('over_under_qualification', '')
-        if over_under:
-            elements.append(Paragraph("<b>Over/Under Qualification Analysis</b>", heading1_style))
-            elements.append(Paragraph(over_under, body_style))
-            elements.append(Spacer(1, 0.2*inch))
-        
-        # Interview Questions
-        technical_questions = evaluation_data.get('technical_questions', [])
-        nontechnical_questions = evaluation_data.get('nontechnical_questions', [])
-        behavioral_questions = evaluation_data.get('behavioral_questions', [])
-        
-        if technical_questions or nontechnical_questions or behavioral_questions:
-            elements.append(PageBreak())
-            elements.append(Paragraph("<b>Interview Questions</b>", heading1_style))
-            
-            if technical_questions:
-                elements.append(Paragraph("<b>Technical Questions:</b>", heading2_style))
-                for i, q in enumerate(technical_questions[:10], 1):  # Limit to 10
-                    elements.append(Paragraph(f"{i}. {q}", body_style))
-                elements.append(Spacer(1, 0.2*inch))
-            
-            if nontechnical_questions:
-                elements.append(Paragraph("<b>Non-Technical Questions:</b>", heading2_style))
-                for i, q in enumerate(nontechnical_questions[:10], 1):  # Limit to 10
-                    elements.append(Paragraph(f"{i}. {q}", body_style))
-                elements.append(Spacer(1, 0.2*inch))
-            
-            if behavioral_questions:
-                elements.append(Paragraph("<b>Behavioral Questions:</b>", heading2_style))
-                for i, q in enumerate(behavioral_questions[:10], 1):  # Limit to 10
-                    elements.append(Paragraph(f"{i}. {q}", body_style))
-        
-        # Build PDF and set metadata
-        def _set_meta(canvas, _):
-            title_parts = [p for p in ["Resume Evaluation", job_title, filename] if p]
-            canvas.setTitle(" - ".join(title_parts))
-            canvas.setAuthor("PeopleLogic PeopleBot")
-        
-        doc.build(elements, onFirstPage=_set_meta, onLaterPages=_set_meta)
-        
-        # Get PDF data
-        pdf_data = buffer.getvalue()
-        buffer.close()
         
         logging.info("PDF generated successfully")
         
@@ -7459,40 +7314,9 @@ def download_evaluation_with_resume():
         
         logging.info(f"Generating merged PDF: evaluation + resume from {full_resume_path}")
         
-        # Generate evaluation PDF by making an internal call to the existing endpoint logic
-        # We'll create a minimal request context to reuse the download_evaluation_pdf logic
-        # Actually simpler: just generate the PDF using the same code pattern
-        
-        # Create evaluation PDF in memory (simplified version - can be enhanced later)
-        eval_buffer = BytesIO()
-        eval_doc = SimpleDocTemplate(eval_buffer, pagesize=A4, rightMargin=50, leftMargin=50, topMargin=72, bottomMargin=18)
-        
-        styles = getSampleStyleSheet()
-        title_style = ParagraphStyle('CustomTitle', parent=styles['Heading1'], fontSize=24, textColor='#2c3e50', spaceAfter=30, alignment=TA_CENTER)
-        heading1_style = ParagraphStyle('CustomHeading1', parent=styles['Heading1'], fontSize=18, textColor='#2c3e50', spaceAfter=12, spaceBefore=12)
-        heading2_style = ParagraphStyle('CustomHeading2', parent=styles['Heading2'], fontSize=14, textColor='#34495e', spaceAfter=10, spaceBefore=10)
-        body_style = ParagraphStyle('CustomBody', parent=styles['BodyText'], fontSize=11, alignment=TA_LEFT, spaceAfter=12)
-        
-        eval_elements = [Paragraph("Resume Evaluation Report", title_style), Spacer(1, 0.2*inch)]
-        eval_elements.append(Paragraph(f"<b>Job Title:</b> {evaluation_data.get('job_title', 'N/A')}", body_style))
-        eval_elements.append(Paragraph(f"<b>Candidate Resume:</b> {evaluation_data.get('filename', 'Unknown')}", body_style))
-        if evaluation_data.get('oorwin_job_id'):
-            eval_elements.append(Paragraph(f"<b>Job ID:</b> {evaluation_data.get('oorwin_job_id')}", body_style))
-        eval_elements.append(Spacer(1, 0.3*inch))
-        
-        match_pct = evaluation_data.get('match_percentage', 0)
-        match_pct_str = evaluation_data.get('match_percentage_str', f"{match_pct}%")
-        eval_elements.append(Paragraph(f"<b>Match Score: {match_pct_str}</b>", heading1_style))
-        eval_elements.append(Spacer(1, 0.2*inch))
-        
-        # Add other sections if available (simplified - can add more later)
-        if evaluation_data.get('profile_summary'):
-            eval_elements.append(Paragraph("<b>Profile Summary:</b>", heading2_style))
-            eval_elements.append(Paragraph(evaluation_data.get('profile_summary', ''), body_style))
-        
-        eval_doc.build(eval_elements)
-        evaluation_pdf_bytes = eval_buffer.getvalue()
-        eval_buffer.close()
+        # Same full PeopleLogic evaluation layout as standalone PDF download
+        # Concise 1–2 page evaluation (no interview questions), then resume PDF
+        evaluation_pdf_bytes = build_evaluation_pdf_bytes(evaluation_data, concise=True)
         
         # Merge evaluation PDF with resume PDF
         merger = PdfMerger()
@@ -7725,10 +7549,15 @@ def get_evaluations_by_job(job_id):
         evaluations = []
         for row in rows:
             email = row[4]
+            # Normalize match_percentage for API consumers (avoid None in JS comparisons)
+            try:
+                mp_value = int(row[2]) if row[2] is not None else 0
+            except (ValueError, TypeError):
+                mp_value = 0
             evaluations.append({
                 'id': row[0],
                 'filename': row[1],
-                'match_percentage': row[2],
+                'match_percentage': mp_value,
                 'timestamp': row[3],
                 'user_email': email,
                 'evaluator_name': evaluator_names.get(email, email) if email else 'Unknown'
@@ -7761,424 +7590,8 @@ async def download_handbook_pdf():
                 'message': 'No content to download'
             }), 400
         
-        logging.info("Generating PDF from handbook content...")
-        
-        # Create PDF in memory
-        buffer = BytesIO()
-        doc = SimpleDocTemplate(
-            buffer,
-            pagesize=A4,
-            rightMargin=50,  # Reduced margins for better table fit
-            leftMargin=50,
-            topMargin=72,
-            bottomMargin=18,
-        )
-        
-        # Container for the 'Flowable' objects
-        elements = []
-        
-        # Define styles
-        styles = getSampleStyleSheet()
-        
-        # Custom styles
-        title_style = ParagraphStyle(
-            'CustomTitle',
-            parent=styles['Heading1'],
-            fontSize=24,
-            textColor='#2c3e50',
-            spaceAfter=30,
-            alignment=TA_CENTER
-        )
-        
-        heading1_style = ParagraphStyle(
-            'CustomHeading1',
-            parent=styles['Heading1'],
-            fontSize=18,
-            textColor='#2c3e50',
-            spaceAfter=12,
-            spaceBefore=12
-        )
-        
-        # Blue style for main section titles
-        heading1_blue_style = ParagraphStyle(
-            'CustomHeading1Blue',
-            parent=styles['Heading1'],
-            fontSize=18,
-            textColor='#3498db',  # Blue color
-            spaceAfter=12,
-            spaceBefore=12
-        )
-        
-        heading2_style = ParagraphStyle(
-            'CustomHeading2',
-            parent=styles['Heading2'],
-            fontSize=14,
-            textColor='#34495e',
-            spaceAfter=10,
-            spaceBefore=10
-        )
-        
-        # Blue style for main section titles (H2)
-        heading2_blue_style = ParagraphStyle(
-            'CustomHeading2Blue',
-            parent=styles['Heading2'],
-            fontSize=14,
-            textColor='#3498db',  # Blue color
-            spaceAfter=10,
-            spaceBefore=10
-        )
-        
-        body_style = ParagraphStyle(
-            'CustomBody',
-            parent=styles['BodyText'],
-            fontSize=11,
-            alignment=TA_JUSTIFY,
-            spaceAfter=12
-        )
-        
-        bullet_style = ParagraphStyle(
-            'CustomBullet',
-            parent=styles['BodyText'],
-            fontSize=11,
-            leftIndent=20,
-            spaceAfter=6
-        )
-        
-        # Helper function to check if heading is a main section title (should be blue)
-        def is_main_section_title(text):
-            """Check if heading text matches one of the 7 main section titles (EXCLUDE Introduction)"""
-            # Explicitly exclude "Introduction"
-            text_clean = re.sub(r'[^\x00-\x7F]+', '', text).strip()  # Remove emojis first
-            if re.match(r'^Introduction\s*:?\s*$', text_clean, re.IGNORECASE):
-                return False
-            
-            main_titles = [
-                r'^\s*\d+\.?\s*Primary\s+Sourcing\s+Parameters\s*\(Must-Have\)\s*:?',
-                r'^\s*\d+\.?\s*Screening\s+Framework\s*:?',
-                r'^\s*\d+\.?\s*Target\s+Talent\s+Pools\s*:?',
-                r'^\s*\d+\.?\s*Red\s+Flags\s+to\s+Watch\s*:?',
-                r'^\s*\d+\.?\s*Recruiter\s+Sales\s+Pitch\s*\(to\s+candidates\)\s*:?',
-                r'^\s*\d+\.?\s*Recruiter\s+Checklist\s*\(Pre-call\)\s*:?',
-                r'^\s*\d+\.?\s*Overqualification/Overkill\s+Risk\s+Assessment\s*:?',
-                # Also match without numbers (in case LLM doesn't include them)
-                r'^\s*Primary\s+Sourcing\s+Parameters\s*\(Must-Have\)\s*:?',
-                r'^\s*Screening\s+Framework\s*:?',
-                r'^\s*Target\s+Talent\s+Pools\s*:?',
-                r'^\s*Red\s+Flags\s+to\s+Watch\s*:?',
-                r'^\s*Recruiter\s+Sales\s+Pitch\s*\(to\s+candidates\)\s*:?',
-                r'^\s*Recruiter\s+Checklist\s*\(Pre-call\)\s*:?',
-                r'^\s*Overqualification/Overkill\s+Risk\s+Assessment\s*:?'
-            ]
-            return any(re.match(pattern, text_clean, re.IGNORECASE) for pattern in main_titles)
-        
-        # Parse markdown content and convert to PDF elements
-        lines = markdown_content.split('\n')
-        i = 0
-        in_table = False
-        table_rows = []
-        seen_intro = False  # Track if we've seen Introduction section
-        
-        while i < len(lines):
-            line = lines[i].strip()
-            
-            # Skip empty lines (but add small spacing)
-            if not line:
-                if not in_table:
-                    elements.append(Spacer(1, 0.15*inch))
-                i += 1
-                continue
-            
-            # Skip duplicate "Introduction:" lines (blue colored duplicates that appear after title)
-            if re.match(r'^Introduction:?\s*$', line, re.IGNORECASE):
-                if seen_intro:
-                    # Skip this duplicate intro line and any following empty lines
-                    i += 1
-                    while i < len(lines) and not lines[i].strip():
-                        i += 1
-                    continue
-                seen_intro = True
-            
-            # Skip TOC markdown links (they don't work in PDF anyway)
-            if re.match(r'^-\s*\[.*\]\(#.*\)', line):
-                i += 1
-                continue
-            
-            # Handle markdown tables
-            if '|' in line and line.count('|') >= 2:
-                # Check if it's a table header separator (contains dashes)
-                if re.match(r'^\|[\s\-:]+\|', line):
-                    i += 1
-                    continue
-                
-                # Parse table row
-                cells = [cell.strip() for cell in line.split('|')[1:-1]]  # Remove first/last empty
-                if cells:
-                    table_rows.append(cells)
-                    in_table = True
-                    i += 1
-                    continue
-            else:
-                # If we were building a table, finish it
-                if in_table and table_rows:
-                    # Create PDF table
-                    table_data = table_rows
-                    
-                    # Check if this is "Primary Sourcing Parameters" table (first column should be blue)
-                    is_sourcing_table = len(table_data) > 0 and len(table_data[0]) > 0 and (
-                        'Skill' in str(table_data[0]) or 'Experience' in str(table_data[0]) or 
-                        'Recruiter Cue' in str(table_data[0])
-                    )
-                    
-                    # Calculate available width (A4 width - margins in points)
-                    available_width = A4[0] - 100  # 50pt margin on each side (72pt = 1 inch)
-                    
-                    # Calculate column widths based on number of columns
-                    num_cols = len(table_data[0]) if table_data else 4
-                    if is_sourcing_table and num_cols >= 4:
-                        # For Primary Sourcing Parameters: narrow first col, distribute rest
-                        col_widths = [35] + [(available_width - 35) / (num_cols - 1)] * (num_cols - 1)
-                    else:
-                        # Equal width for all columns
-                        col_widths = [available_width / num_cols] * num_cols
-                    
-                    # Convert table cells to Paragraph objects for proper text wrapping
-                    table_style_small = ParagraphStyle(
-                        'TableCell',
-                        parent=styles['Normal'],
-                        fontSize=9,
-                        leading=11,  # Line height
-                        spaceAfter=0,
-                        spaceBefore=0,
-                    )
-                    
-                    # Process table data: convert strings to Paragraphs for wrapping
-                    table_style_header = ParagraphStyle(
-                        'TableHeader',
-                        parent=styles['Normal'],
-                        fontSize=10,
-                        leading=12,
-                        spaceAfter=0,
-                        spaceBefore=0,
-                        fontName='Helvetica-Bold',
-                    )
-                    
-                    processed_table_data = []
-                    for row_idx, row in enumerate(table_data):
-                        processed_row = []
-                        for col_idx, cell_text in enumerate(row):
-                            # Escape HTML and convert to Paragraph for wrapping
-                            cell_text_clean = str(cell_text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                            # Convert markdown bold/italic
-                            cell_text_clean = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', cell_text_clean)
-                            cell_text_clean = re.sub(r'\*(.+?)\*', r'<i>\1</i>', cell_text_clean)
-                            # Use header style for first row, body style for others
-                            cell_style = table_style_header if row_idx == 0 else table_style_small
-                            # Create Paragraph for proper wrapping
-                            processed_row.append(Paragraph(cell_text_clean, cell_style))
-                        processed_table_data.append(processed_row)
-                    
-                    pdf_table = Table(processed_table_data, colWidths=col_widths)
-                    
-                    # Build table style
-                    table_style = [
-                        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2c3e50')),  # Dark header
-                        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                        ('FONTSIZE', (0, 0), (-1, 0), 10),  # Header font size
-                        ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
-                        ('TOPPADDING', (0, 0), (-1, 0), 6),
-                        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#34495e')),  # Thinner grid
-                        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
-                        ('VALIGN', (0, 0), (-1, -1), 'TOP'),  # Top align for multi-line cells
-                        ('LEFTPADDING', (0, 0), (-1, -1), 5),
-                        ('RIGHTPADDING', (0, 0), (-1, -1), 5),
-                        ('BOTTOMPADDING', (0, 1), (-1, -1), 4),  # Padding for body cells
-                        ('TOPPADDING', (0, 1), (-1, -1), 4),
-                    ]
-                    
-                    # If it's the Primary Sourcing Parameters table, style first column (numbers) in blue
-                    if is_sourcing_table and len(table_data[0]) >= 4:
-                        table_style.extend([
-                            ('TEXTCOLOR', (0, 1), (0, -1), colors.HexColor('#3498db')),  # Blue for first column
-                            ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),  # Bold first column
-                            ('ALIGN', (0, 1), (0, -1), 'CENTER'),  # Center first column
-                        ])
-                    
-                    pdf_table.setStyle(TableStyle(table_style))
-                    elements.append(Spacer(1, 0.1*inch))
-                    elements.append(pdf_table)
-                    elements.append(Spacer(1, 0.2*inch))
-                    table_rows = []
-                    in_table = False
-            
-            # Escape special characters for ReportLab
-            line = unescape(line)
-            line = line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            
-            # Handle headers
-            if line.startswith('# '):
-                text = line[2:].strip()
-                # Remove emojis from headers
-                text = re.sub(r'[^\x00-\x7F]+', '', text).strip()
-                elements.append(Spacer(1, 0.2*inch))
-                elements.append(Paragraph(text, title_style))
-            elif line.startswith('## '):
-                text = line[3:].strip()
-                text_clean = re.sub(r'[^\x00-\x7F]+', '', text).strip()
-                elements.append(Spacer(1, 0.15*inch))
-                # Use blue style if it's a main section title
-                style_to_use = heading1_blue_style if is_main_section_title(text_clean) else heading1_style
-                elements.append(Paragraph(text_clean, style_to_use))
-            elif line.startswith('### '):
-                text = line[4:].strip()
-                text_clean = re.sub(r'[^\x00-\x7F]+', '', text).strip()
-                elements.append(Spacer(1, 0.1*inch))
-                # Use blue style if it's a main section title
-                style_to_use = heading2_blue_style if is_main_section_title(text_clean) else heading2_style
-                elements.append(Paragraph(text_clean, style_to_use))
-            elif line.startswith('#### '):
-                text = line[5:].strip()
-                text_clean = re.sub(r'[^\x00-\x7F]+', '', text).strip()
-                elements.append(Spacer(1, 0.08*inch))
-                # Use blue style if it's a main section title
-                style_to_use = heading2_blue_style if is_main_section_title(text_clean) else heading2_style
-                elements.append(Paragraph(text_clean, style_to_use))
-            # Handle bullet points
-            elif line.startswith('- ') or line.startswith('* ') or line.startswith('• '):
-                text = line[2:].strip() if line.startswith('- ') or line.startswith('* ') else line[2:].strip()
-                # Convert markdown formatting in bullets
-                text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
-                text = re.sub(r'\*(.+?)\*', r'<i>\1</i>', text)
-                elements.append(Paragraph('• ' + text, bullet_style))
-            elif line.startswith('o '):
-                text = line[2:].strip()
-                text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
-                text = re.sub(r'\*(.+?)\*', r'<i>\1</i>', text)
-                elements.append(Paragraph('○ ' + text, bullet_style))
-            # Handle numbered lists
-            elif re.match(r'^\d+\.\s', line):
-                text = re.sub(r'^\d+\.\s', '', line)
-                text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
-                text = re.sub(r'\*(.+?)\*', r'<i>\1</i>', text)
-                elements.append(Paragraph(text, bullet_style))
-            # Handle bold text (standalone)
-            elif line.startswith('**') and line.endswith('**'):
-                text = '<b>' + line[2:-2].strip() + '</b>'
-                elements.append(Paragraph(text, body_style))
-            # Handle horizontal rules
-            elif line.startswith('---') or line.startswith('___'):
-                elements.append(Spacer(1, 0.3*inch))
-            # Regular text
-            else:
-                # Convert markdown bold and italic
-                text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', line)
-                text = re.sub(r'\*(.+?)\*', r'<i>\1</i>', text)
-                # Remove emojis from regular text (optional - comment out if you want to keep them)
-                # text = re.sub(r'[^\x00-\x7F]+', '', text)
-                if text.strip():
-                    elements.append(Paragraph(text, body_style))
-            
-            i += 1
-        
-        # Handle any remaining table
-        if in_table and table_rows:
-            table_data = table_rows
-            
-            # Check if this is "Primary Sourcing Parameters" table
-            is_sourcing_table = len(table_data) > 0 and len(table_data[0]) > 0 and (
-                'Skill' in str(table_data[0]) or 'Experience' in str(table_data[0]) or 
-                'Recruiter Cue' in str(table_data[0])
-            )
-            
-            # Calculate available width (A4 width - margins in points)
-            available_width = A4[0] - 100  # 50pt margin on each side
-            
-            # Calculate column widths
-            num_cols = len(table_data[0]) if table_data else 4
-            if is_sourcing_table and num_cols >= 4:
-                col_widths = [35] + [(available_width - 35) / (num_cols - 1)] * (num_cols - 1)
-            else:
-                col_widths = [available_width / num_cols] * num_cols
-            
-            # Convert table cells to Paragraph objects for proper text wrapping
-            table_style_small = ParagraphStyle(
-                'TableCell',
-                parent=styles['Normal'],
-                fontSize=9,
-                leading=11,  # Line height
-                spaceAfter=0,
-                spaceBefore=0,
-            )
-            
-            # Process table data: convert strings to Paragraphs for wrapping
-            table_style_header = ParagraphStyle(
-                'TableHeader',
-                parent=styles['Normal'],
-                fontSize=10,
-                leading=12,
-                spaceAfter=0,
-                spaceBefore=0,
-                fontName='Helvetica-Bold',
-            )
-            
-            processed_table_data = []
-            for row_idx, row in enumerate(table_data):
-                processed_row = []
-                for col_idx, cell_text in enumerate(row):
-                    # Escape HTML and convert to Paragraph for wrapping
-                    cell_text_clean = str(cell_text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                    # Convert markdown bold/italic
-                    cell_text_clean = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', cell_text_clean)
-                    cell_text_clean = re.sub(r'\*(.+?)\*', r'<i>\1</i>', cell_text_clean)
-                    # Use header style for first row, body style for others
-                    cell_style = table_style_header if row_idx == 0 else table_style_small
-                    # Create Paragraph for proper wrapping
-                    processed_row.append(Paragraph(cell_text_clean, cell_style))
-                processed_table_data.append(processed_row)
-            
-            pdf_table = Table(processed_table_data, colWidths=col_widths)
-            
-            table_style = [
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2c3e50')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 10),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
-                ('TOPPADDING', (0, 0), (-1, 0), 6),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#34495e')),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
-                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                ('LEFTPADDING', (0, 0), (-1, -1), 5),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 5),
-                ('BOTTOMPADDING', (0, 1), (-1, -1), 4),
-                ('TOPPADDING', (0, 1), (-1, -1), 4),
-            ]
-            
-            if is_sourcing_table and len(table_data[0]) >= 4:
-                table_style.extend([
-                    ('TEXTCOLOR', (0, 1), (0, -1), colors.HexColor('#3498db')),
-                    ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),
-                    ('ALIGN', (0, 1), (0, -1), 'CENTER'),
-                ])
-            
-            pdf_table.setStyle(TableStyle(table_style))
-            elements.append(Spacer(1, 0.1*inch))
-            elements.append(pdf_table)
-            elements.append(Spacer(1, 0.2*inch))
-        
-        # Build PDF and set metadata title
-        def _set_meta(canvas, _):
-            title_parts = [p for p in ["Recruiter Handbook", job_title, oorwin_job_id] if p]
-            canvas.setTitle(" - ".join(title_parts))
-            canvas.setAuthor("PeopleLogic PeopleBot")
-
-        doc.build(elements, onFirstPage=_set_meta, onLaterPages=_set_meta)
-        
-        # Get PDF data
-        pdf_data = buffer.getvalue()
-        buffer.close()
+        logging.info("Generating PDF from handbook content (branded handbook_pdf)...")
+        pdf_data = build_handbook_pdf_bytes(markdown_content, job_title, oorwin_job_id)
         
         logging.info("PDF generated successfully")
         

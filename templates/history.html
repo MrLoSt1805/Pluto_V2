@@ -12,6 +12,13 @@
             <p class="mb-0 small">View all handbooks and evaluations grouped by Job ID</p>
     </div>
         <div class="card-body">
+            <div class="alert alert-info mb-3 py-2 small" role="status">
+                <i class="bi bi-book"></i>
+                <strong>Recruiter handbooks:</strong>
+                In the table below, find your <strong>Job ID</strong> row. If a handbook was generated for that job, the
+                <strong>Job Title</strong> appears as a <span class="text-primary text-decoration-underline">blue link</span>
+                — click it to open the full handbook in Pluto. (Jobs with no handbook show the title as plain text.)
+            </div>
             <!-- Loading State -->
             <div id="history-loading" class="text-center py-5">
                 <div class="spinner-border text-primary" role="status">
@@ -95,19 +102,18 @@
                     </div>
                         </div>
                         
-<!-- Modal for Viewing Evaluations -->
-<div class="modal fade" id="evaluationsModal" tabindex="-1" aria-labelledby="evaluationsModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-xl">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="evaluationsModalLabel">
-                    <i class="bi bi-file-earmark-text"></i> Resume Evaluations
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div class="modal-body" id="evaluationsModalBody">
-                <!-- Evaluations list will be populated here -->
-            </div>
+<!-- Custom Overlay for Viewing Evaluations (Bootstrap modal replaced to avoid interaction issues) -->
+<div id="evaluationsOverlay" class="eval-overlay" style="display: none;">
+    <div class="eval-overlay-backdrop"></div>
+    <div class="eval-overlay-modal">
+        <div class="eval-overlay-header">
+            <h5 class="mb-0" id="evaluationsModalLabel">
+                <i class="bi bi-file-earmark-text"></i> Resume Evaluations
+            </h5>
+            <button type="button" class="btn-close eval-overlay-close" aria-label="Close"></button>
+        </div>
+        <div class="eval-overlay-body" id="evaluationsModalBody">
+            <!-- Evaluations list will be populated here -->
         </div>
     </div>
 </div>
@@ -145,6 +151,53 @@
     transform: scale(1.05);
     box-shadow: 0 2px 5px rgba(0,0,0,0.2);
 }
+
+/* Make long evaluation lists scroll inside the popup (keep Bootstrap defaults for z-index/backdrop) */
+.eval-overlay-body {
+    max-height: 70vh;
+    overflow-y: auto;
+}
+
+/* Custom evaluation overlay – independent of Bootstrap modals */
+.eval-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 5vh;
+}
+
+.eval-overlay-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+}
+
+.eval-overlay-modal {
+    position: relative;
+    background: #ffffff;
+    border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+    width: min(1000px, 96vw);
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    z-index: 2001;
+}
+
+.eval-overlay-header {
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid #dee2e6;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.eval-overlay-body {
+    padding: 1rem;
+}
 </style>
 
 <script>
@@ -157,6 +210,7 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('job-filter').value = '';
         filterJobs();
     });
+
 });
 
 async function loadJobHistory() {
@@ -411,7 +465,7 @@ function viewHandbookContent(index) {
 }
 
 async function showEvaluationsModal(job) {
-    const modal = new bootstrap.Modal(document.getElementById('evaluationsModal'));
+    const overlay = document.getElementById('evaluationsOverlay');
     const modalBody = document.getElementById('evaluationsModalBody');
     
     document.getElementById('evaluationsModalLabel').innerHTML = `
@@ -419,7 +473,7 @@ async function showEvaluationsModal(job) {
     `;
     
     modalBody.innerHTML = '<div class="text-center py-3"><div class="spinner-border"></div><p>Loading evaluations...</p></div>';
-    modal.show();
+    overlay.style.display = 'flex';
     
     try {
         const response = await fetch(`/api/evaluations-by-job/${encodeURIComponent(job.job_id)}`);
@@ -427,7 +481,7 @@ async function showEvaluationsModal(job) {
         
         if (data.success && data.evaluations.length > 0) {
             modalBody.innerHTML = `
-                                <div class="table-responsive">
+                <div class="table-responsive">
                     <table class="table table-hover">
                         <thead class="table-light">
                             <tr>
@@ -437,8 +491,8 @@ async function showEvaluationsModal(job) {
                                 <th>Date</th>
                                 <th>Actions</th>
                             </tr>
-                                        </thead>
-                                        <tbody>
+                        </thead>
+                        <tbody>
                             ${data.evaluations.map(eval => {
                                 const scoreClass = eval.match_percentage >= 70 ? 'text-success' :
                                                    eval.match_percentage >= 50 ? 'text-warning' : 'text-danger';
@@ -457,18 +511,19 @@ async function showEvaluationsModal(job) {
                                                 <i class="bi bi-eye"></i> View
                                             </button>
                                         </td>
-                                                    </tr>
+                                    </tr>
                                 `;
                             }).join('')}
-                                        </tbody>
-                                    </table>
-                                </div>
+                        </tbody>
+                    </table>
+                </div>
             `;
             
             // Add click handlers for view buttons
             setTimeout(() => {
                 document.querySelectorAll('.view-evaluation-btn').forEach(btn => {
-                    btn.addEventListener('click', function() {
+                    btn.addEventListener('click', function (e) {
+                        e.stopPropagation(); // do not close overlay by mistake
                         const evalId = this.getAttribute('data-eval-id');
                         viewEvaluationDetails(evalId);
                     });
@@ -482,29 +537,28 @@ async function showEvaluationsModal(job) {
     }
 }
 
-async function viewEvaluationDetails(evalId) {
-    try {
-        // Fetch full evaluation data
-        const response = await fetch(`/api/evaluation-full/${evalId}`);
-        const data = await response.json();
-        
-        if (data.success) {
-            // Close the modal
-            const modal = bootstrap.Modal.getInstance(document.getElementById('evaluationsModal'));
-            if (modal) modal.hide();
-            
-            // Store evaluation data in session storage
-            sessionStorage.setItem('viewEvaluationData', JSON.stringify(data.evaluation));
-            
-            // Navigate to resume evaluator page in evaluation view mode
-            window.location.href = '/resume-evaluator?view_evaluation=' + evalId;
-        } else {
-            alert('Error loading evaluation details: ' + data.message);
-        }
-    } catch (error) {
-        alert('Error loading evaluation details: ' + error.message);
+function viewEvaluationDetails(evalId) {
+    // Close custom overlay (if open) before navigating
+    const overlay = document.getElementById('evaluationsOverlay');
+    if (overlay) {
+        overlay.style.display = 'none';
     }
+    // Navigate directly to the dedicated evaluation view page.
+    window.location.href = '/evaluation/' + evalId;
 }
+
+// Close evaluation overlay when clicking backdrop or X button
+document.addEventListener('click', function (e) {
+    const overlay = document.getElementById('evaluationsOverlay');
+    if (!overlay || overlay.style.display === 'none') return;
+
+    const isBackdrop = e.target.classList.contains('eval-overlay-backdrop');
+    const isCloseBtn = e.target.closest('.eval-overlay-close');
+
+    if (isBackdrop || isCloseBtn) {
+        overlay.style.display = 'none';
+    }
+}, true);
 </script>
 
 {% endblock %} 
